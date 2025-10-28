@@ -9,6 +9,8 @@ models:
       activation: "sigmoid"
     mlp:
       n_layers: 3
+      d_hidden: 124
+      d_out: 16
     rnn:
       n_blocks: 8
       

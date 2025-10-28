@@ -10,11 +10,12 @@ def main():
     env = create_lunar_lander_with_vision()
     obs, info = env.reset()
     print(obs.keys())
-    print(obs['state'])
-    print(obs['pixels'][1][1:10])
+    print(obs['state'].shape)
+    print(obs['pixels'].shape)
     
-    world_model = RSSMWorldModel()
-    world_model(obs)
+    
+    # world_model = RSSMWorldModel()
+    # world_model(obs)
 
 if __name__ == "__main__":
     main()

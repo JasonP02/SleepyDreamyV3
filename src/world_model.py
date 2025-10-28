@@ -30,14 +30,22 @@ class ObservationEncoder(nn.Module):
 
 
 class ObservationCNNEncoder(nn.Module):
+    """
+    Observations are compressed to 6x6 or 4x4, flattened, and joined to the MLP encoding
+    The input image is (400, 600, 3)
+    """
     def __init__(self,
                  in_channel,
                  out_channel,
                  kernel_size,
                  stride,
-                 padding
+                 padding,
+                 d_hidden,
                  ):
         super().__init__()
+        self.n_channels = d_hidden / 16
+        self.codes_per_latent = d_hidden / 16
+
         self.conv1 = nn.Conv2d(in_channels=in_channel,
                                out_channels=out_channel,
                                kernel_size=kernel_size,
@@ -45,5 +53,30 @@ class ObservationCNNEncoder(nn.Module):
                                padding=padding)
 
 class ObservationMLPEncoder(nn.Module):
-    def __init(self):
-        pass
+    """
+    Observations are encoded with 3-layer MLP
+    Input state is a vector of size 8
+    """
+    def __init__(self,
+               d_in,
+               d_hidden,
+               d_out,
+               ):
+        super().__init__()
+        self.w1 = nn.Linear(d_in, d_hidden)
+        self.w2 = nn.Linear(d_hidden, d_hidden)
+        self.w3 = nn.Linear(d_hidden, d_out)
+        self.b1 = nn.init.zeros_(d_hidden)
+        self.b2 = nn.init.zeros_(d_hidden)
+        self.b3 = nn.init.zeros_(d_hidden)
+        
+        self.act = F.relu # TODO review this
+    
+    def forward(self, x):
+        h = self.act(self.w1 @ x + self.b1)
+        h = self.act(self.w2 @ h + self.b2)
+        h = self.fact(self.w3 @ h + self.b3)
+        return h
+
+
+
