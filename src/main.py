@@ -1,11 +1,11 @@
 import gymnasium as gym
 import torch
-from util import load_config
 from lunar_lander import create_lunar_lander_with_vision
 from world_model import RSSMWorldModel
+from config import config
 
 def main():
-    config = load_config()
+    print(config.environment.frame_size)
 
     env = create_lunar_lander_with_vision()
     obs, info = env.reset()
