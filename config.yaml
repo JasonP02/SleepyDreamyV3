@@ -1,1 +1,14 @@
-env: "car_racing"
+general:
+  env: "car_racing"
+  device : "cuda"
+
+models:
+  encoder:
+    cnn:
+      stride: 2
+      activation: "sigmoid"
+    mlp:
+      n_layers: 3
+    rnn:
+      n_blocks: 8
+      
