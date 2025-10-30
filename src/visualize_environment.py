@@ -43,7 +43,11 @@ def visualize_simulation_frames(num_episodes=1, max_steps_per_episode=500, delay
             plt.clf()
             
             # Resize the frame
-            resized_frame = resize_frame(obs['pixels'], target_size=(150, 100))
+            import torch.nn.functional as F
+            import torch
+            pixel_tensor = torch.tensor(obs['pixels']).permute(2,0,1).unsqueeze(0)
+            resized_frame = F.interpolate(pixel_tensor, size=(64,64), mode='bilinear', align_corners=False)
+            resized_frame = resized_frame.squeeze(0).permute(1,2,0)
             
             # Display the current frame
             plt.imshow(resized_frame)

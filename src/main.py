@@ -9,6 +9,7 @@ def main():
 
     env = create_lunar_lander_with_vision()
     obs, info = env.reset()
+
     print(obs.keys())
     print(obs['state'].shape)
     print(obs['pixels'].shape)
