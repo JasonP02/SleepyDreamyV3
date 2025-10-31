@@ -12,6 +12,38 @@ class RSSMWorldModel:
     ):
         self.encoder = ObservationEncoder()
 
+class GatedRecurrentUnit(nn.Module):
+    def __init__(self,
+                 d_in,
+                 d_hidden,
+                 ):
+        super().__init__()
+        self.d_hidden = d_hidden
+        self.W_ir = nn.Linear(d_in, d_hidden)
+        self.W_hr = nn.Linear(d_hidden, d_hidden)
+        self.b_ir = nn.Parameter(torch.zeros(d_hidden))
+        self.b_hr = nn.Parameter(torch.zeros(d_hidden))
+        self.W_iz = nn.Linear(d_in, d_hidden)
+        self.W_hz = nn.Linear(d_hidden, d_hidden)
+        self.b_iz = nn.Parameter(torch.zeros(d_hidden))
+        self.b_hz = nn.Parameter(torch.zeros(d_hidden))
+        self.W_in = nn.Linear(d_in, d_hidden)
+        self.W_hn = nn.Linear(d_hidden, d_hidden)
+        self.b_in = nn.Parameter(torch.zeros(d_hidden))
+        self.b_hn = nn.Parameter(torch.zeros(d_hidden))
+
+    def forward(self, x, h_prev=None):
+        batch_size = x.shape[0]
+        if h_prev is None:
+            h_prev = torch.zeros(batch_size, self.d_hidden, device=x.device, dtype=x.dtype)
+    
+        r = torch.sigmoid(self.W_ir(x) + self.W_hr(h_prev) + self.b_ir + self.b_hr)
+        z = torch.sigmoid(self.W_iz(x) + self.W_hz(h_prev) + self.b_iz + self.b_hz)
+        n = torch.tanh(self.W_in(x) + self.b_in + r * (self.W_hn(h_prev) + self.b_hn))
+        h = (1 - z) * n + z * h_prev
+        return h
+
+
 class ObservationEncoder(nn.Module):
     def __init__(self,
                  mlp_config,
