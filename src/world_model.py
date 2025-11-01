@@ -1,194 +1,101 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from encoder import ObservationEncoder
 
-class RSSMWorldModel:
+class RSSMWorldModel(nn.Module):
     """
     World model architecture from Dreamerv3
     * 
     """
     def __init__(
             self,
+            mlp_config,
+            cnn_config,
     ):
-        self.encoder = ObservationEncoder()
+        super().__init__()
+        d_hidden = mlp_config.d_hidden
+        
+        self.encoder = ObservationEncoder(mlp_config=mlp_config, cnn_config=cnn_config)
+        self.sequence_model = GatedRecurrentUnit(d_in=1, d_hidden=d_hidden)
+
+        self.h_prev = torch.zeros(d_hidden)
+        self.dynamics_predictor = DynamicsPredictor()
+
+    def forward(self, x):
+        h = self.sequence_model(x=x, h_prev=self.h_prev)
+
+
+class DynamicsPredictor(nn.Module):
+    """
+    Upscales GRU to d_hidden ** 2 / 16
+    Breaks the hidden state into a distribution, and set of bins 
+    Takes logits over the bins (final dimension)
+    """
+    def __init__(self,
+                 d_in,
+                 d_hidden
+                ):
+        super().__init__()
+        d_out = d_hidden**2 / 16
+        self.latents = d_hidden
+
+        self.layers = nn.Sequential(
+            nn.Linear(d_in, d_hidden, bias=True),
+            nn.ReLU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(),
+            nn.Linear(d_hidden, d_out)
+        )
+
+    def forward(self, x):
+        out = self.layers(x)
+        out = out.view(out.shape[0], self.latents, self.latents//16)
+
+        out =  F.softmax(input=out, dim=2) # output a probability distribution (z)
+        return out
 
 class GatedRecurrentUnit(nn.Module):
+    """
+    The GRU is the paper's recurrent model for 'dreaming' ahead
+    Takes:
+        h_{t-1}: Previous hidden state
+        z_{t-1}: Previous stochastic representation
+        z_{t-1}: Previous *action*
+    Returns:
+        h_{t}: Current hidden state
+    z: output of encoder "ObservationEncoder" class
+    a: action sampled from policy: $a_{t} ~ \pi(a_{t} | s_{t})
+    
+    From the paper: 
+    "The input to the GRU is a linear embedding of the *sampled latent z_t*, 
+    the action a_t, and the recurrent state"
+
+    """
     def __init__(self,
                  d_in,
                  d_hidden,
                  ):
         super().__init__()
         self.d_hidden = d_hidden
-        self.W_ir = nn.Linear(d_in, d_hidden)
-        self.W_hr = nn.Linear(d_hidden, d_hidden)
-        self.b_ir = nn.Parameter(torch.zeros(d_hidden))
-        self.b_hr = nn.Parameter(torch.zeros(d_hidden))
-        self.W_iz = nn.Linear(d_in, d_hidden)
-        self.W_hz = nn.Linear(d_hidden, d_hidden)
-        self.b_iz = nn.Parameter(torch.zeros(d_hidden))
-        self.b_hz = nn.Parameter(torch.zeros(d_hidden))
-        self.W_in = nn.Linear(d_in, d_hidden)
-        self.W_hn = nn.Linear(d_hidden, d_hidden)
-        self.b_in = nn.Parameter(torch.zeros(d_hidden))
-        self.b_hn = nn.Parameter(torch.zeros(d_hidden))
+        self.W_ir = nn.Linear(d_in, d_hidden, bias=True)
+        self.W_hr = nn.Linear(d_hidden, d_hidden, bias=True)
+        self.W_iz = nn.Linear(d_in, d_hidden, bias=True)
+        self.W_hz = nn.Linear(d_hidden, d_hidden, bias=True)
+        self.W_in = nn.Linear(d_in, d_hidden, bias=True)
+        self.W_hn = nn.Linear(d_hidden, d_hidden, bias=True)
 
     def forward(self, x, h_prev=None):
         batch_size = x.shape[0]
         if h_prev is None:
             h_prev = torch.zeros(batch_size, self.d_hidden, device=x.device, dtype=x.dtype)
     
-        r = torch.sigmoid(self.W_ir(x) + self.W_hr(h_prev) + self.b_ir + self.b_hr)
-        z = torch.sigmoid(self.W_iz(x) + self.W_hz(h_prev) + self.b_iz + self.b_hz)
-        n = torch.tanh(self.W_in(x) + self.b_in + r * (self.W_hn(h_prev) + self.b_hn))
+        r = torch.sigmoid(self.W_ir(x) + self.W_hr(h_prev))
+        z = torch.sigmoid(self.W_iz(x) + self.W_hz(h_prev))
+        n = torch.tanh(self.W_in(x) + r * self.W_hn(h_prev))
         h = (1 - z) * n + z * h_prev
         return h
 
-
-class ObservationEncoder(nn.Module):
-    def __init__(self,
-                 mlp_config,
-                 cnn_config,
-                 ):
-        super().__init__()
-        self.MLP = ObservationMLPEncoder(
-            d_in=8,
-            d_hidden=mlp_config.d_hidden,
-            d_out=mlp_config.d_out
-        )
-        self.CNN = ObservationCNNEncoder(
-            target_size=cnn_config.target_size,
-            in_channels=cnn_config.input_channels,
-            kernel_size=cnn_config.kernel_size,
-            stride=cnn_config.stride,
-            padding=cnn_config.padding,
-            d_hidden=mlp_config.d_hidden,
-            hidden_dim_ratio=mlp_config.hidden_dim_ratio,
-            num_layers=cnn_config.num_layers,
-            final_feature_size=cnn_config.final_feature_size
-        )
-
-        self.latents = mlp_config.d_out
-        # Use dynamic calculation based on actual config parameters
-        n_channels = int(mlp_config.d_hidden / mlp_config.hidden_dim_ratio)
-        cnn_out_features = (n_channels * 2**(cnn_config.num_layers-1)) * cnn_config.final_feature_size**2
-        encoder_out = cnn_out_features + mlp_config.d_out # CNN + MLP
-        
-        # Paper 
-        logit_out = self.latents * (self.latents // 16)
-        self.logit_layer = nn.Linear(in_features=encoder_out, out_features=logit_out)
-
-    def forward(self, x):
-        # x is passed as a dict of ['state', 'pixels']
-        image_obs = x['pixels']
-        vec_obs = x['state']
-
-        x1 = self.CNN(image_obs)
-        x1 = x1.view(x1.size(0), -1) # Flatten all features
-
-        x2 = self.MLP(vec_obs)
-        x = torch.cat((x1,x2), dim=1) # Join outputs along feature dimension
-
-        # feed this through a network to get out code * latent size
-        x = self.logit_layer(x)
-        x = x.view(x.shape[0], self.latents, self.latents//16)
-
-        out =  F.softmax(input=x, dim=2) # output a probability distribution (z)
-        return out
-        
-class ObservationCNNEncoder(nn.Module):
-    """
-    Observations are compressed dynamically based on config.
-    Uses a series of convolutions with doubling channel progression.
-    """
-    def __init__(self,
-                 target_size,
-                 in_channels,
-                 kernel_size,
-                 stride,
-                 padding,
-                 d_hidden,
-                 hidden_dim_ratio=16,
-                 num_layers=4,
-                 final_feature_size=4
-                 ):
-        super().__init__()
-        self.target_size = target_size
-        self.num_layers = num_layers
-        self.final_feature_size = final_feature_size
-
-        # Calculate base channel count from hidden dim ratio
-        base_channels = int(d_hidden / hidden_dim_ratio)
-        
-        # Build sequential layers with ReLU activation
-        conv_layers = []
-        
-        for i in range(num_layers):
-            if i == 0:
-                # First layer: input_channels -> base_channels
-                out_ch = base_channels
-                conv_layers.append(
-                    nn.Conv2d(
-                        in_channels=in_channels,
-                        out_channels=out_ch,
-                        kernel_size=kernel_size,
-                        stride=stride,
-                        padding=padding
-                    )
-                )
-            else:
-                # Subsequent layers: base_channels*2^(i-1) -> base_channels*2^i
-                out_ch = base_channels * (2 ** i)
-                in_ch = base_channels * (2 ** (i - 1))
-                conv_layers.append(
-                    nn.Conv2d(
-                        in_channels=in_ch,
-                        out_channels=out_ch,
-                        kernel_size=kernel_size,
-                        stride=stride,
-                        padding=padding
-                    )
-                )
-        
-        # Wrap in Sequential for clean forward pass
-        self.cnn_blocks = nn.Sequential(*conv_layers)
-
-    def forward(self, x):
-        # resize image to target shape
-        x = F.interpolate(
-            input=x,
-            size=self.target_size,
-            mode='bilinear',
-        )
-
-        # Apply ReLU + convolution sequentially
-        x = self.cnn_blocks(x)
-        return x
-
-class ObservationMLPEncoder(nn.Module):
-    """
-    Observations are encoded with 3-layer MLP
-    Input state is a vector of size 8
-    """
-    def __init__(self,
-               d_in,
-               d_hidden,
-               d_out,
-               ):
-        super().__init__()
-        self.w1 = nn.Linear(d_in, d_hidden)
-        self.w2 = nn.Linear(d_hidden, d_hidden)
-        self.w3 = nn.Linear(d_hidden, d_out)
-        self.b1 = nn.Parameter(torch.zeros(d_hidden))
-        self.b2 = nn.Parameter(torch.zeros(d_hidden))
-        self.b3 = nn.Parameter(torch.zeros(d_out))
-        
-        self.act = F.relu # TODO review this
-    
-    def forward(self, x):
-        h = self.act(self.w1(x) + self.b1)
-        h = self.act(self.w2(h) + self.b2)
-        h = self.act(self.w3(h) + self.b3)
-        return h
 
 
 
