@@ -1,59 +1,39 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from encoder import ObservationEncoder
+from src.encoder import ObservationEncoder
 
 class RSSMWorldModel(nn.Module):
     """
-    World model architecture from Dreamerv3
-    * 
+    World model architecture from Dreamerv3, called a 'Recurrent State Space Model'
+
+    1. Encode scene (image, observation vector) -> Returns binned distribution of states 'z'
+    2. 
     """
     def __init__(
             self,
             mlp_config,
             cnn_config,
+            env_config,
     ):
         super().__init__()
         d_hidden = mlp_config.d_hidden
+        n_actions = env_config.n_actions
         
+        # Transforms scene (image, obs) to latent distribution "z" for sampling
         self.encoder = ObservationEncoder(mlp_config=mlp_config, cnn_config=cnn_config)
-        self.sequence_model = GatedRecurrentUnit(d_in=1, d_hidden=d_hidden)
+
+        # Models the recurrent represetnation of the enviornment
+        self.sequence_model = GatedRecurrentUnit(d_in=d_hidden+n_actions, d_hidden=d_hidden)
 
         self.h_prev = torch.zeros(d_hidden)
+
+        # Predicts the latent distribution \hat{z} from the sequence model
         self.dynamics_predictor = DynamicsPredictor()
 
     def forward(self, x):
         h = self.sequence_model(x=x, h_prev=self.h_prev)
 
-
-class DynamicsPredictor(nn.Module):
-    """
-    Upscales GRU to d_hidden ** 2 / 16
-    Breaks the hidden state into a distribution, and set of bins 
-    Takes logits over the bins (final dimension)
-    """
-    def __init__(self,
-                 d_in,
-                 d_hidden
-                ):
-        super().__init__()
-        d_out = d_hidden**2 / 16
-        self.latents = d_hidden
-
-        self.layers = nn.Sequential(
-            nn.Linear(d_in, d_hidden, bias=True),
-            nn.ReLU(),
-            nn.Linear(d_hidden, d_hidden),
-            nn.ReLU(),
-            nn.Linear(d_hidden, d_out)
-        )
-
-    def forward(self, x):
-        out = self.layers(x)
-        out = out.view(out.shape[0], self.latents, self.latents//16)
-
-        out =  F.softmax(input=out, dim=2) # output a probability distribution (z)
-        return out
 
 class GatedRecurrentUnit(nn.Module):
     """
@@ -86,6 +66,16 @@ class GatedRecurrentUnit(nn.Module):
         self.W_hn = nn.Linear(d_hidden, d_hidden, bias=True)
 
     def forward(self, x, h_prev=None):
+        """
+        'x' contains a sampled vector from the distribution z_{t-1},
+        and the previous action, a_{t-1}
+
+        z has shape: (B, d_hidden, d_hidden/16)
+        a has shape: (B, 4)
+
+        Thus, the shape of x is 
+        """
+
         batch_size = x.shape[0]
         if h_prev is None:
             h_prev = torch.zeros(batch_size, self.d_hidden, device=x.device, dtype=x.dtype)
@@ -96,6 +86,34 @@ class GatedRecurrentUnit(nn.Module):
         h = (1 - z) * n + z * h_prev
         return h
 
+class DynamicsPredictor(nn.Module):
+    """
+    Upscales GRU to d_hidden ** 2 / 16
+    Breaks the hidden state into a distribution, and set of bins 
+    Takes logits over the bins (final dimension)
+    """
+    def __init__(self,
+                 d_in,
+                 d_hidden
+                ):
+        super().__init__()
+        d_out = d_hidden**2 / 16
+        self.latents = d_hidden
+
+        self.layers = nn.Sequential(
+            nn.Linear(d_in, d_hidden, bias=True),
+            nn.ReLU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(),
+            nn.Linear(d_hidden, d_out)
+        )
+
+    def forward(self, x):
+        out = self.layers(x)
+        out = out.view(out.shape[0], self.latents, self.latents//16)
+
+        out =  F.softmax(input=out, dim=2) # output a probability distribution (z)
+        return out
 
 
 

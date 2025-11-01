@@ -7,7 +7,7 @@ class GeneralConfig(BaseModel):
     device: str = "cuda"
 
 class EnvironmentConfig(BaseModel):
-    pass
+    n_actions: int = 4
 
 class CNNEncoderConfig(BaseModel):
     stride: int = 2

@@ -1,6 +1,6 @@
 import torch
 import pytest
-from src.world_model import (
+from src.encoder import (
     ObservationMLPEncoder,
     ObservationCNNEncoder,
     ObservationEncoder,
