@@ -13,15 +13,17 @@ def test_encoder_mlp():
     """
     We encode the observation vectors with a 3-layer MLP
     """
+    d_in = 8
+    d_out = 128
     model = ObservationMLPEncoder(
-        d_in=8,
-        d_hidden=128,
-        d_out=4
+        d_in=d_in,
+        d_hidden=d_out,
     )
-    x_shape = (128, 8) # batch, vector
+    bsz = 128
+    x_shape = (bsz, d_in) # batch, vector
     sample_data = torch.rand(x_shape)
     out = model(sample_data)
-    assert out.shape == (128, 4)
+    assert out.shape == (bsz, d_out)
 
 def test_encoder_cnn():
     """

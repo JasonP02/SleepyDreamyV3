@@ -1,7 +1,7 @@
 import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
-from lunar_lander import create_lunar_lander_with_vision
+from .lunar_lander import create_lunar_lander_with_vision
 import time
 import cv2
 

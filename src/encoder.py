@@ -11,7 +11,6 @@ class ObservationEncoder(nn.Module):
         self.MLP = ObservationMLPEncoder(
             d_in=8,
             d_hidden=mlp_config.d_hidden,
-            d_out=mlp_config.d_out
         )
         self.CNN = ObservationCNNEncoder(
             target_size=cnn_config.target_size,
@@ -25,17 +24,17 @@ class ObservationEncoder(nn.Module):
             final_feature_size=cnn_config.final_feature_size
         )
 
-        self.latents = mlp_config.d_out
+        self.latents = mlp_config.d_hidden
         # Use dynamic calculation based on actual config parameters
         n_channels = int(mlp_config.d_hidden / mlp_config.hidden_dim_ratio)
         cnn_out_features = (n_channels * 2**(cnn_config.num_layers-1)) * cnn_config.final_feature_size**2
-        encoder_out = cnn_out_features + mlp_config.d_out # CNN + MLP
+        encoder_out = cnn_out_features + mlp_config.d_hidden # CNN + MLP
         
         # Paper 
         logit_out = self.latents * (self.latents // 16)
         self.logit_layer = nn.Linear(in_features=encoder_out, out_features=logit_out)
 
-    def forward(self, x):
+    def forward(self, x) -> torch.tensor:
         # x is passed as a dict of ['state', 'pixels']
         image_obs = x['pixels']
         vec_obs = x['state']
@@ -133,7 +132,6 @@ class ObservationMLPEncoder(nn.Module):
     def __init__(self,
                d_in,
                d_hidden,
-               d_out,
                ):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -141,7 +139,7 @@ class ObservationMLPEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(d_hidden, d_hidden, bias=True),
             nn.ReLU(),
-            nn.Linear(d_hidden, d_out, bias=True)
+            nn.Linear(d_hidden, d_hidden, bias=True)
         )
     
     def forward(self, x):

@@ -12,9 +12,9 @@ def test_gru():
     n_actions = config.environment.n_actions
     d_in = d_hidden + n_actions
     bsz = 1000
-    in_shape = (bsz, d_in)
-    x = torch.rand(in_shape)
+    z = torch.rand((bsz, d_hidden))  # encoded state
+    a = torch.rand((bsz, n_actions))  # action
 
     gru = GatedRecurrentUnit(d_in=d_in, d_hidden=d_hidden)
-    out = gru(x)
+    out = gru(z, a)
     assert out.shape == (bsz, d_hidden)

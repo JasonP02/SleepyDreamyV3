@@ -8,6 +8,7 @@ class GeneralConfig(BaseModel):
 
 class EnvironmentConfig(BaseModel):
     n_actions: int = 4
+    n_observations: int = 8
 
 class CNNEncoderConfig(BaseModel):
     stride: int = 2
@@ -22,8 +23,7 @@ class CNNEncoderConfig(BaseModel):
 class MLPEncoderConfig(BaseModel):
     hidden_dim_ratio: int = 16
     n_layers: int = 3
-    d_hidden: int = 124
-    d_out: int = 1024
+    d_hidden: int = 1024
 
 class GRUConfig(BaseModel):
     n_blocks: int = 8
@@ -31,15 +31,20 @@ class GRUConfig(BaseModel):
 class EncoderConfig(BaseModel):
     cnn: CNNEncoderConfig = CNNEncoderConfig()
     mlp: MLPEncoderConfig = MLPEncoderConfig()
-    rnn: GRUConfig = GRUConfig()
 
 class ModelsConfig(BaseModel):
     encoder: EncoderConfig = EncoderConfig()
+    rnn: GRUConfig = GRUConfig()
+
+class TrainConfig(BaseModel):
+    num_episodes: int = 100
+    batch_size: int = 1
 
 class Config(BaseModel):
     general: GeneralConfig = GeneralConfig()
     environment: EnvironmentConfig = EnvironmentConfig()
     models: ModelsConfig = ModelsConfig()
+    train: TrainConfig = TrainConfig()
 
 # Default configuration instance
 config = Config()
