@@ -2,16 +2,14 @@ import gymnasium as gym
 import torch
 import os
 
-from .lunar_lander import create_lunar_lander_with_vision
+from .environment import create_env_with_vision, collect_bootstrapping_examples
 from .world_model import RSSMWorldModel
 from .world_model_trainer import train_world_model
 from .config import config
 
 def main():
-    env = create_lunar_lander_with_vision()
+    env = create_env_with_vision()
     obs, info = env.reset()
-
-    print(obs.keys())
 
     world_model = RSSMWorldModel(
         mlp_config=config.models.encoder.mlp,
@@ -29,11 +27,9 @@ def main():
 
     try:
         world_model.load_state_dict(torch.load(checkpoint_path))
-    except:
-        print("Could not load world model, returning")
-
-
-
+    except Exception as e:
+        print("Could not load world model, returning" + e)
+        return e
 
     for episode in range(config.train.num_episodes):
         obs, info = env.reset()

@@ -6,6 +6,8 @@ class GeneralConfig(BaseModel):
     env: str = "car_racing"
     device: str = "cuda"
     world_model_path: str = "world_model.pt"
+    train_world_model: True
+    env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
 
 class EnvironmentConfig(BaseModel):
     n_actions: int = 4
