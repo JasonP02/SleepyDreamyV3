@@ -2,12 +2,21 @@
 This marks what I have done, and what is to be done
 
 ## Current
-Figuring out how to pass in the encoder output (z) to the RSSM (f(h_{t-1}...))
-The output of the encoder is (B,d_h,n_bins) where n_bins = d_h/16
-The input of the RSSM is 
+Investigating how world model training will go.
+* Can we train as we run the sim, or will we be sim bottlenecked?
+* Should we train a policy on the env before doing the dreamer?
+Implementing the loss functions for world model training
+Gathering training data (obs, action) pairs
 
-The key detail is the usage of 'straight through gradients'. This is from *Dreamer v2* under **algorithm 1**
+To train the world model & actor critic we need rollouts
+Thus, the main script will check if we have rollouts
+If there are no rollouts, we will get some
+Then it will train the world model
+Then we will train the actor critic inside the w/m
 
+To me, it seems like a bad idea to couple these things too strongly. If the a/c has a problem in training, we then would need to train the w/m again. 
+
+To get around this, we could use checkpointing. A more manual method would be just to save the model .pt file and bypass training if it exists (with the optional flag of re-training)
 
 
 ## Next
@@ -25,6 +34,7 @@ Add symlog transform to vector inputs
 
 
 ## Completed
+* Straight through gradients for passing sampled z into f(h)
 * Writing the GRU block-diagonal recurrent weights
 * Add tests for the GRU
 * Loaded the enviornment

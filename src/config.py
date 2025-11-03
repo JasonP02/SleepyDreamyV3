@@ -5,6 +5,7 @@ from typing import Tuple
 class GeneralConfig(BaseModel):
     env: str = "car_racing"
     device: str = "cuda"
+    world_model_path: str = "world_model.pt"
 
 class EnvironmentConfig(BaseModel):
     n_actions: int = 4

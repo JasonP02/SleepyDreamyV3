@@ -91,14 +91,10 @@ class GatedRecurrentUnit(nn.Module):
     Returns:
         h_{t}: Current hidden state/16
     z: output of encoder "ObservationEncoder" class
-    a: action sampled from policy: $a_{t} ~ pi(a_{t} | s_{t})
+    a: action sampled from policy: a_{t} ~ pi(a_{t} | s_{t})
     
-    From the paper: 
     "The input to the GRU is a linear embedding of the *sampled latent z_t*, 
     the action a_t, and the recurrent state"
-
-    Authors use block-diagonal weights with 8 blocks.
-
     """
     def __init__(self,
                  d_in,
@@ -114,19 +110,9 @@ class GatedRecurrentUnit(nn.Module):
         self.W_hn = nn.Linear(d_hidden, d_hidden, bias=True)
 
     def forward(self, z, a, h_prev=None):
-        """
-        and the previous action, a_{t-1}
-        'x' contains a sampled vector from the distribution z_{t-1},
-
-        z has shape: (B, d_hidden) since it is *after sampling*
-        Thus, the shape of x is 
-        a has shape: (B, 4)
-        """
-
         batch_size = z.shape[0]
         x = torch.cat((z,a), dim=1) # Join x and a in the hidden state axis
         if h_prev is None:
-
             h_prev = torch.zeros(batch_size, self.d_hidden, device=x.device, dtype=x.dtype)
     
         r = torch.sigmoid(self.W_ir(x) + self.W_hr(h_prev))

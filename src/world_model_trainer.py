@@ -1,39 +1,20 @@
-import gymnasium as gym
-import torch
-import os
+"""
+Takes in collection of observation action pairs from a pretrained policy
+Batches them
+Trains a world model conditioned on those observations & actions
+This is a bootstrapping script for integration with online actor/critic learning later
+"""
 
-from .lunar_lander import create_lunar_lander_with_vision
+import torch
+import torch.nn.functional as F
+
 from .world_model import RSSMWorldModel
-from .world_model_trainer import train_world_model
 from .config import config
+from .lunar_lander import create_lunar_lander_with_vision
 
 def main():
     env = create_lunar_lander_with_vision()
     obs, info = env.reset()
-
-    print(obs.keys())
-
-    world_model = RSSMWorldModel(
-        mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn,
-        env_config=config.environment,
-        gru_config=config.models.rnn,
-        batch_size=config.train.batch_size
-    )
-
-    checkpoint_path = config.general.world_model_path
-    if os.path.exists(checkpoint_path) and config.general.train_world_model == False:
-        pass
-    else:
-        train_world_model()
-
-    try:
-        world_model.load_state_dict(torch.load(checkpoint_path))
-    except:
-        print("Could not load world model, returning")
-
-
-
 
     for episode in range(config.train.num_episodes):
         obs, info = env.reset()
@@ -70,6 +51,7 @@ def main():
                 break
     
     env.close()
+
 
 if __name__ == "__main__":
     main()
