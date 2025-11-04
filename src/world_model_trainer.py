@@ -66,51 +66,20 @@ def train_world_model():
     dataset = TrajectoryDataset(config.general.env_bootstrapping_samples, sequence_length=50)
     dataloader = DataLoader(dataset, batch_size=config.train.batch_size, shuffle=True, num_workers=4)
 
-    # --- Training Loop ---
-    for epoch in range(10): # Example: 10 epochs
-        total_loss = 0
-        for batch in dataloader:
-            # batch is a dict of tensors with shape (batch_size, sequence_length, ...)
-            pixels = batch['pixels']
-            states = batch['state']
-            actions = batch['action']
-            
-            # Reset model state for new batch
+    for batch in dataloader:
+        pixels = batch['pixels'] # (batch_size, sequence_length, 3, 64, 64)
+        states = batch['state'] # (batch_size, sequence_length, 8)
+        actions = batch['action'] # (batch_size, sequence_length, 4)
+
+        for t in range(sequence_length):
             world_model.h_prev.zero_()
             world_model.z_prev.zero_()
 
-            loss = 0
-            # Iterate over the time sequence
-            for t in range(pixels.shape[1]):
-                optimizer.zero_grad()
+            obs_t = {'pixels': pixels[:, t], 'state': states[:, t]}
+            action_t = actions[:, t]
+            z_hat = world_model(obs_t, action_t)
 
-                obs_t = {'pixels': pixels[:, t], 'state': states[:, t]}
-                action_t = actions[:, t]
-
-                # Get prediction from model
-                z_hat_dist = world_model(obs_t, action_t)
-                
-                # Get target distribution from encoder
-                with torch.no_grad():
-                    z_dist_target = world_model.encoder(obs_t)
-
-                # KL-Divergence loss between prediction and target
-                # This is a simplified loss for demonstration
-                kl_loss = torch.distributions.kl.kl_divergence(
-                    torch.distributions.Categorical(probs=z_dist_target),
-                    torch.distributions.Categorical(probs=z_hat_dist)
-                ).mean()
-                
-                loss += kl_loss
-
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        
-        print(f"Epoch {epoch+1}, Average Loss: {total_loss / len(dataloader)}")
-
-    torch.save(world_model.state_dict(), config.general.world_model_path)
-    print(f"World model saved to {config.general.world_model_path}")
+            l_pred = 
 
 if __name__ == "__main__":
     train_world_model()

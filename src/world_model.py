@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as dist
 from .encoder import ObservationEncoder
+from .decoder import ObservationDecoder
 
 class RSSMWorldModel(nn.Module):
     """
@@ -45,7 +46,8 @@ class RSSMWorldModel(nn.Module):
         
         # Linear layer to project categorical sample to embedding dimension
         # Takes 2D categorical samples and projects to d_hidden for GRU input
-        self.z_embedding = nn.Linear(int(self.d_hidden**2/16), self.d_hidden)
+        self.z_embedding = nn.Linear(self.d_hidden * (self.d_hidden // 16), self.d_hidden)
+        self.decoder = ObservationDecoder(mlp_config=mlp_config, cnn_config=cnn_config, env_config=env_config)
 
     def forward(self, x, a):
         """
@@ -79,7 +81,9 @@ class RSSMWorldModel(nn.Module):
 
         self.h_prev = h
         self.z_prev = z_dist
-        return dynamics_prediction
+
+        # Decode the prediction and hidden state back into the original space
+        obs_reconstruction = self.decoder(z_sample, h)
 
 class GatedRecurrentUnit(nn.Module):
     """
