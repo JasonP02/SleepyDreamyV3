@@ -19,6 +19,7 @@ class RSSMWorldModel(nn.Module):
             cnn_config,
             env_config,
             gru_config,
+            decoder_config,
             batch_size
     ):
         super().__init__()
@@ -47,7 +48,13 @@ class RSSMWorldModel(nn.Module):
         # Linear layer to project categorical sample to embedding dimension
         # Takes 2D categorical samples and projects to d_hidden for GRU input
         self.z_embedding = nn.Linear(self.d_hidden * (self.d_hidden // 16), self.d_hidden)
-        self.decoder = ObservationDecoder(mlp_config=mlp_config, cnn_config=cnn_config, env_config=env_config)
+        self.decoder = ObservationDecoder(
+            mlp_config=mlp_config, 
+            cnn_config=cnn_config, 
+            env_config=env_config, 
+            gru_config=gru_config, 
+            decoder_config=decoder_config
+        )
 
     def forward(self, x, a):
         """
@@ -84,6 +91,7 @@ class RSSMWorldModel(nn.Module):
 
         # Decode the prediction and hidden state back into the original space
         obs_reconstruction = self.decoder(z_sample, h)
+        return obs_reconstruction
 
 class GatedRecurrentUnit(nn.Module):
     """

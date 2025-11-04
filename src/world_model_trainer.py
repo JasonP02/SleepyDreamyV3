@@ -59,6 +59,7 @@ def train_world_model():
         cnn_config=config.models.encoder.cnn,
         env_config=config.environment,
         gru_config=config.models.rnn,
+        decoder_config=config.models.decoder,
         batch_size=config.train.batch_size
     )
     optimizer = optim.Adam(world_model.parameters(), lr=1e-4)
@@ -71,15 +72,16 @@ def train_world_model():
         states = batch['state'] # (batch_size, sequence_length, 8)
         actions = batch['action'] # (batch_size, sequence_length, 4)
 
-        for t in range(sequence_length):
+        for t in range(pixels.shape[1]):
             world_model.h_prev.zero_()
             world_model.z_prev.zero_()
 
             obs_t = {'pixels': pixels[:, t], 'state': states[:, t]}
             action_t = actions[:, t]
-            z_hat = world_model(obs_t, action_t)
 
-            l_pred = 
+            x_reconstructed = world_model(obs_t, action_t)
+
+            
 
 if __name__ == "__main__":
     train_world_model()

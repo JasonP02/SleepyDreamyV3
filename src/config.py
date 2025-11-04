@@ -35,9 +35,13 @@ class EncoderConfig(BaseModel):
     cnn: CNNEncoderConfig = CNNEncoderConfig()
     mlp: MLPEncoderConfig = MLPEncoderConfig()
 
+class DecoderConfig(BaseModel):
+    n_bins: int = 256
+
 class ModelsConfig(BaseModel):
     encoder: EncoderConfig = EncoderConfig()
     rnn: GRUConfig = GRUConfig()
+    decoder: DecoderConfig = DecoderConfig()
 
 class TrainConfig(BaseModel):
     num_bootstrap_episodes: int = 100

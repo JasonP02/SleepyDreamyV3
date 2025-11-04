@@ -1,17 +1,26 @@
-import torch.nn as nn
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributions as dist
 
 class ObservationDecoder(nn.Module):
+    """
+    Reconstructs the image and state vector from the model's state.
+    Outputs a distribution over the image and state vector. The output is
+    logits for a categorical distribution over bins.
+    """
     def __init__(self,
                  mlp_config,
                  cnn_config,
                  env_config,
                  gru_config,
+                 decoder_config,
                  ):
         super().__init__()
         d_hidden = mlp_config.d_hidden
-        n_gru_blocks = gru_config.n_blocks # From gru_config, but it's fixed in the paper
+        n_gru_blocks = gru_config.n_blocks 
+        self.n_bins = decoder_config.n_bins
         
         # The state for the decoder is the concatenation of the GRU hidden state `h`
         # and the flattened latent sample `z`.
@@ -20,7 +29,8 @@ class ObservationDecoder(nn.Module):
         self.MLP = ObservationMLPDecoder(
             d_in=decoder_input_dim,
             d_hidden=mlp_config.d_hidden,
-            d_out=env_config.n_observations
+            d_out=env_config.n_observations,
+            n_bins=self.n_bins
         )
         self.CNN = ObservationCNNDecoder(
             d_in=decoder_input_dim,
@@ -31,7 +41,8 @@ class ObservationDecoder(nn.Module):
             d_hidden=mlp_config.d_hidden,
             hidden_dim_ratio=mlp_config.hidden_dim_ratio,
             num_layers=cnn_config.num_layers,
-            final_feature_size=cnn_config.final_feature_size
+            final_feature_size=cnn_config.final_feature_size,
+            n_bins=self.n_bins
         )
 
     def forward(self, z, h):
@@ -48,7 +59,10 @@ class ObservationDecoder(nn.Module):
         pixels_rec = self.CNN(decoder_in)
         state_rec = self.MLP(decoder_in)
 
-        return {'pixels': pixels_rec, 'state': state_rec}
+        return {
+            'pixels': dist.Categorical(logits=pixels_rec), 
+            'state': dist.Categorical(logits=state_rec)
+        }
 
 class ObservationCNNDecoder(nn.Module):
     """
@@ -65,8 +79,10 @@ class ObservationCNNDecoder(nn.Module):
                  hidden_dim_ratio,
                  num_layers,
                  final_feature_size,
+                 n_bins,
                  ):
         super().__init__()
+        self.n_bins = n_bins
         base_channels = int(d_hidden / hidden_dim_ratio)
         
         # This is the number of channels at the input of the decoder CNN,
@@ -84,7 +100,7 @@ class ObservationCNNDecoder(nn.Module):
             if i > 0:
                 out_ch = base_channels * (2**(i - 1))
             else:
-                out_ch = in_channels # Final layer outputs the image channels
+                out_ch = in_channels * self.n_bins # Final layer outputs logits for each channel
 
             deconv_layers.append(nn.ReLU())
             deconv_layers.append(
@@ -101,7 +117,13 @@ class ObservationCNNDecoder(nn.Module):
     def forward(self, x):
         x = self.fc(x)
         x = x.view(-1, *self.first_layer_shape)
-        x = self.deconv_blocks(x)
+        x = self.deconv_blocks(x) # (N, C * n_bins, H, W)
+        
+        # Reshape to (N, H, W, C, n_bins) for Categorical distribution
+        n, c_bins, h, w = x.shape
+        c = c_bins // self.n_bins
+        x = x.view(n, c, self.n_bins, h, w)
+        x = x.permute(0, 3, 4, 1, 2) # (N, H, W, C, n_bins)
         return x
 
 class ObservationMLPDecoder(nn.Module):
@@ -110,6 +132,7 @@ class ObservationMLPDecoder(nn.Module):
                  d_in,
                  d_hidden,
                  d_out,
+                 n_bins,
                  ):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -117,8 +140,12 @@ class ObservationMLPDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(d_hidden, d_hidden),
             nn.ReLU(),
-            nn.Linear(d_hidden, d_out)
+            nn.Linear(d_hidden, d_out * n_bins)
         )
+        self.d_out = d_out
+        self.n_bins = n_bins
     
     def forward(self, x):
-        return self.mlp(x)
+        x = self.mlp(x)
+        # Reshape to (N, d_out, n_bins) for Categorical distribution
+        return x.view(x.shape[0], self.d_out, self.n_bins)
