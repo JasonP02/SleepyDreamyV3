@@ -3,13 +3,13 @@ from pydantic import BaseModel
 from typing import Tuple
 
 class GeneralConfig(BaseModel):
-    env: str = "car_racing"
     device: str = "cuda"
     world_model_path: str = "world_model.pt"
-    train_world_model: True
+    train_world_model: bool = True
     env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
 
 class EnvironmentConfig(BaseModel):
+    environment_name: str = "LunarLander-v3"
     n_actions: int = 4
     n_observations: int = 8
 
@@ -40,6 +40,7 @@ class ModelsConfig(BaseModel):
     rnn: GRUConfig = GRUConfig()
 
 class TrainConfig(BaseModel):
+    num_bootstrap_episodes: int = 100
     num_episodes: int = 100
     batch_size: int = 1
 

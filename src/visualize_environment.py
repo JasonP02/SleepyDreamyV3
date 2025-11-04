@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from .lunar_lander import create_lunar_lander_with_vision
 import time
 import cv2
+import argparse
 
 def resize_frame(frame, target_size=(150, 100)):
     """
@@ -187,30 +188,40 @@ def analyze_observation_structure():
     env.close()
 
 if __name__ == "__main__":
-    print("Choose what to do:")
-    print("1. Visualize simulation frames (requires matplotlib)")
-    print("2. Save frames to video (requires opencv-python)")
-    print("3. Analyze observation structure")
-    
-    choice = input("Enter your choice (1/2/3): ").strip()
-    
-    if choice == "1":
+    parser = argparse.ArgumentParser(description="Visualize or record the Lunar Lander environment.")
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
+
+    # --- Visualize command ---
+    parser_visualize = subparsers.add_parser("visualize", help="Visualize simulation frames in real-time.")
+    parser_visualize.add_argument("-e", "--episodes", type=int, default=1, help="Number of episodes to visualize.")
+    parser_visualize.add_argument("-d", "--delay", type=float, default=0.05, help="Delay between frames in seconds.")
+
+    # --- Save command ---
+    parser_save = subparsers.add_parser("save", help="Save simulation frames to a video file.")
+    parser_save.add_argument("-e", "--episodes", type=int, default=1, help="Number of episodes to record.")
+    parser_save.add_argument("-o", "--output", type=str, default="lunar_lander_frames.mp4", help="Output video file path.")
+
+    # --- Analyze command ---
+    parser_analyze = subparsers.add_parser("analyze", help="Analyze and print the structure of environment observations.")
+
+    args = parser.parse_args()
+
+    if args.command == "visualize":
         try:
             import matplotlib.pyplot as plt
-            num_episodes = int(input("Number of episodes to visualize (default 1): ") or "1")
-            delay = float(input("Delay between frames in seconds (default 0.05): ") or "0.05")
-            visualize_simulation_frames(num_episodes=num_episodes, delay=delay)
+            print(f"Visualizing {args.episodes} episode(s) with a {args.delay}s delay...")
+            visualize_simulation_frames(num_episodes=args.episodes, delay=args.delay)
         except ImportError:
-            print("Matplotlib not installed. Install with: pip install matplotlib")
+            print("Error: Matplotlib is required for visualization. Please install it using 'pip install matplotlib'")
     
-    elif choice == "2":
-        num_episodes = int(input("Number of episodes to record (default 1): ") or "1")
-        output_path = input("Output video path (default 'lunar_lander_frames.mp4'): ") or "lunar_lander_frames.mp4"
-        save_frames_to_video(num_episodes=num_episodes, output_path=output_path)
-    
-    elif choice == "3":
-        analyze_observation_structure()
-    
-    else:
-        print("Invalid choice. Running observation structure analysis...")
+    elif args.command == "save":
+        try:
+            import cv2
+            print(f"Recording {args.episodes} episode(s) to {args.output}...")
+            save_frames_to_video(num_episodes=args.episodes, output_path=args.output)
+        except ImportError:
+            print("Error: opencv-python is required for saving videos. Please install it using 'pip install opencv-python'")
+
+    elif args.command == "analyze":
+        print("Analyzing observation structure...")
         analyze_observation_structure()

@@ -9,33 +9,35 @@ from .config import config
 
 def main():
     env = create_env_with_vision()
-    obs, info = env.reset()
 
+    checkpoint_path = config.general.world_model_path
+    if not os.path.exists(config.general.env_bootstrapping_samples):
+        print("Bootstrap samples not found. Collecting now...")
+        collect_bootstrapping_examples()
+
+    if config.general.train_world_model or not os.path.exists(checkpoint_path):
+        print("Training world model...")
+        train_world_model()
+
+    print("Loading trained world model...")
     world_model = RSSMWorldModel(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
         env_config=config.environment,
         gru_config=config.models.rnn,
-        batch_size=config.train.batch_size
+        batch_size=1 # For inference, batch size is 1
     )
-
-    checkpoint_path = config.general.world_model_path
-    if os.path.exists(checkpoint_path) and config.general.train_world_model == False:
-        pass
-    else:
-        train_world_model()
-
-    try:
-        world_model.load_state_dict(torch.load(checkpoint_path))
-    except Exception as e:
-        print("Could not load world model, returning" + e)
-        return e
+    world_model.load_state_dict(torch.load(checkpoint_path))
+    print("World model loaded successfully.")
 
     for episode in range(config.train.num_episodes):
         obs, info = env.reset()
         episode_reward = 0
         step_count = 0
         total_reward = 0
+
+        # Reset world model hidden state at the start of each episode
+        world_model.h_prev.zero_()
 
         while True:
             action = env.action_space.sample()
