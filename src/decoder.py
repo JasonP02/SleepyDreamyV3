@@ -19,12 +19,9 @@ class ObservationDecoder(nn.Module):
                  ):
         super().__init__()
         d_hidden = mlp_config.d_hidden
-        n_gru_blocks = gru_config.n_blocks 
         self.n_bins = decoder_config.n_bins
-        
-        # The state for the decoder is the concatenation of the GRU hidden state `h`
-        # and the flattened latent sample `z`.
-        decoder_input_dim = (d_hidden * n_gru_blocks) + d_hidden
+        n_gru_blocks = gru_config.n_blocks
+        decoder_input_dim = (d_hidden * n_gru_blocks) + (d_hidden * (d_hidden // mlp_config.latent_categories))
 
         self.MLP = ObservationMLPDecoder(
             d_in=decoder_input_dim,
@@ -45,24 +42,21 @@ class ObservationDecoder(nn.Module):
             n_bins=self.n_bins
         )
 
-    def forward(self, z, h):
+    def forward(self, decoder_in):
         """
         Decodes the model state (z, h) back into an observation (pixels, state vector).
         z: Sampled latent state, shape (batch, d_hidden, d_hidden/16)
         h: GRU hidden state, shape (batch, d_hidden * n_gru_blocks)
         """
         # Flatten z and concatenate with h to form the decoder input state
-        z_flat = z.view(z.size(0), -1)
-        decoder_in = torch.cat([h, z_flat], dim=-1)
-
         # Reconstruct pixels and state vector
         pixels_rec = self.CNN(decoder_in)
         state_rec = self.MLP(decoder_in)
-
         return {
             'pixels': dist.Categorical(logits=pixels_rec), 
             'state': dist.Categorical(logits=state_rec)
         }
+
 
 class ObservationCNNDecoder(nn.Module):
     """

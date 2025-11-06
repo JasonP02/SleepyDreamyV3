@@ -29,9 +29,10 @@ class ObservationEncoder(nn.Module):
         n_channels = int(mlp_config.d_hidden / mlp_config.hidden_dim_ratio)
         cnn_out_features = (n_channels * 2**(cnn_config.num_layers-1)) * cnn_config.final_feature_size**2
         encoder_out = cnn_out_features + mlp_config.d_hidden # CNN + MLP
+        self.latent_categories = mlp_config.latent_categories
         
         # Paper 
-        logit_out = self.latents * (self.latents // 16)
+        logit_out = self.latents * (self.latents // self.latent_categories)
         self.logit_layer = nn.Linear(in_features=encoder_out, out_features=logit_out)
 
     def forward(self, x) -> torch.tensor:
@@ -47,10 +48,10 @@ class ObservationEncoder(nn.Module):
 
         # feed this through a network to get out code * latent size
         x = self.logit_layer(x)
-        x = x.view(x.shape[0], self.latents, self.latents//16)
+        x = x.view(x.shape[0], self.latents, self.latents // self.latent_categories)
 
-        out =  F.softmax(input=x, dim=2) # output a probability distribution (z)
-        return out
+        # Return logits directly. The Categorical distribution will handle the softmax.
+        return x
         
 class ObservationCNNEncoder(nn.Module):
     """

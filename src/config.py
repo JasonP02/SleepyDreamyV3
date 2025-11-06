@@ -27,6 +27,7 @@ class MLPEncoderConfig(BaseModel):
     hidden_dim_ratio: int = 16
     n_layers: int = 3
     d_hidden: int = 1024
+    latent_categories: int = 16 # Number of categories per latent variable
 
 class GRUConfig(BaseModel):
     n_blocks: int = 8

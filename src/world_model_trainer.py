@@ -54,6 +54,11 @@ class TrajectoryDataset(Dataset):
         }
 
 def train_world_model():
+    """
+    The terminology can get confusing.
+    p(z|h,x) is the posterior from the perspective of the world model.
+    
+    """
     world_model = RSSMWorldModel(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
@@ -68,19 +73,45 @@ def train_world_model():
     dataloader = DataLoader(dataset, batch_size=config.train.batch_size, shuffle=True, num_workers=4)
 
     for batch in dataloader:
+        # Reset hidden states per trajectory
+        world_model.h_prev.zero_()
+        world_model.z_prev.zero_()
+
         pixels = batch['pixels'] # (batch_size, sequence_length, 3, 64, 64)
         states = batch['state'] # (batch_size, sequence_length, 8)
         actions = batch['action'] # (batch_size, sequence_length, 4)
 
         for t in range(pixels.shape[1]):
-            world_model.h_prev.zero_()
-            world_model.z_prev.zero_()
 
             obs_t = {'pixels': pixels[:, t], 'state': states[:, t]}
             action_t = actions[:, t]
 
-            x_reconstructed = world_model(obs_t, action_t)
+            obs_reconstruction, posterior_dist, prior_dist, reward_dist, continue_dist = world_model(obs_t, action_t)
 
+            pixel_dist = obs_reconstruction['pixels']
+            state_dist = obs_reconstruction['state']
+
+            # Log-likelihoods. Torch accepts logits
+            posterior_ll = torch.log(pixel_dist.logits) + torch.log(state_dist.logits)
+            reward_ll = torch.log(reward_dist.logits)
+            continue_ll = torch.log(continue_dist.logits)
+
+            l_pred = -posterior_ll - reward_ll + continue_ll
+
+            l_dyn_term = -torch.distributions.kl_divergence()
+
+            # There are three loss terms:
+            # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
+            # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
+            # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
+
+
+
+
+
+
+            
+            
             
 
 if __name__ == "__main__":

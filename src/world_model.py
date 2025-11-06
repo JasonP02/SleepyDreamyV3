@@ -56,6 +56,9 @@ class RSSMWorldModel(nn.Module):
             decoder_config=decoder_config
         )
 
+        self.reward_predictor = nn.Linear(self.d_hidden*n_gru_blocks, 1)
+        self.continue_predictor = nn.Linear(self.d_hidden*n_gru_blocks, 1)
+
     def forward(self, x, a):
         """
         1. Get distribution of representations (z) from image/obs
@@ -64,13 +67,16 @@ class RSSMWorldModel(nn.Module):
         4. Pass state, h, into dynamics predictor to get the learned representation: z^
         """
         # 1. Get distribution
-        z_dist = self.encoder(x)  # (batch_size, latents, bins_per_latent)
+        posterior_logits = self.encoder(x)  # (batch_size, latents, bins_per_latent)
+        # Create the posterior distribution p(z|o)
+        posterior_dist = dist.Categorical(logits=posterior_logits)
         
         # 2. Apply straight-through method
-        sampling_distribution = dist.Categorical(probs=z_dist)
-        z_indices = sampling_distribution.sample()  # (batch_size, latents)
+        z_indices = posterior_dist.sample()  # (batch_size, latents)
         z_onehot = F.one_hot(z_indices, num_classes=self.d_hidden // 16).float()
-        z_sample = z_onehot + (z_dist - z_dist.detach())
+
+        # The straight-through gradient trick
+        z_sample = z_onehot + (posterior_dist.probs - posterior_dist.probs.detach())
         bsz = z_onehot.shape[0]
         z_flat = z_sample.view(bsz, -1)
         z_embed = self.z_embedding(z_flat)
@@ -85,13 +91,29 @@ class RSSMWorldModel(nn.Module):
 
         # Predict the distribution of z (called z^)
         dynamics_prediction = self.dynamics_predictor(h)
+        prior_logits = self.dynamics_predictor(h)
+        # Create the prior distribution p(z|h)
+        prior_dist = dist.Categorical(logits=prior_logits)
 
         self.h_prev = h
-        self.z_prev = z_dist
+        self.z_prev = posterior_dist.probs # Store probabilities for next step if needed
+
+        # The reward, continue, decoder all take the same input
+        h_z_joined = self.join_h_and_z(h, z_sample)
 
         # Decode the prediction and hidden state back into the original space
-        obs_reconstruction = self.decoder(z_sample, h)
-        return obs_reconstruction
+        obs_reconstruction = self.decoder(h_z_joined)
+        reward_logits = self.reward_predictor(h_z_joined)
+        continue_logits = self.continue_predictor(h_z_joined)
+
+        reward_dist = dist.Categorical(logits=reward_logits)
+        continue_dist = dist.Categorical(logits=continue_logits)
+        
+        return obs_reconstruction, posterior_dist, prior_dist, reward_dist, continue_dist
+
+    def join_h_and_z(self, h, z):
+        z_flat = z.view(z.size(0), -1)
+        return torch.cat([h, z_flat], dim=-1)
 
 class GatedRecurrentUnit(nn.Module):
     """
@@ -159,5 +181,4 @@ class DynamicsPredictor(nn.Module):
         out = self.layers(x)
         out = out.view(out.shape[0], self.latents, self.latents//16)
 
-        out =  F.softmax(input=out, dim=2) # output a probability distribution (z)
         return out

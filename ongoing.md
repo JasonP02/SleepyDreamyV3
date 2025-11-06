@@ -2,7 +2,9 @@
 This marks what I have done, and what is to be done
 
 ## Current
-
+Implementing loss functions... 
+Need to ensure weight initalization is right for different parts of model
+Should consider breaking up the RSSM mode
 
 ## Next
 Add symlog transform to vector inputs
