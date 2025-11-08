@@ -72,6 +72,10 @@ def train_world_model():
     dataset = TrajectoryDataset(config.general.env_bootstrapping_samples, sequence_length=50)
     dataloader = DataLoader(dataset, batch_size=config.train.batch_size, shuffle=True, num_workers=4)
 
+    beta_dyn = config.train.beta_dyn
+    beta_rep = config.train.beta_rep
+    beta_pred = config.train.beta_pred
+
     for batch in dataloader:
         # Reset hidden states per trajectory
         world_model.h_prev.zero_()
@@ -91,28 +95,31 @@ def train_world_model():
             pixel_dist = obs_reconstruction['pixels']
             state_dist = obs_reconstruction['state']
 
+            # There are three loss terms:
+            # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
+            # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
+            # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
             # Log-likelihoods. Torch accepts logits
             posterior_ll = torch.log(pixel_dist.logits) + torch.log(state_dist.logits)
             reward_ll = torch.log(reward_dist.logits)
             continue_ll = torch.log(continue_dist.logits)
 
-            l_pred = -posterior_ll - reward_ll + continue_ll
+            l_pred = (-posterior_ll - reward_ll + continue_ll) * beta_pred
 
-            l_dyn_term = -torch.distributions.kl_divergence()
+            term_1 = posterior_dist.probs # q(z|h,x)
+            term_2 = prior_dist.probs # p(z|h)
 
-            # There are three loss terms:
-            # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
-            # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
-            # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
+            l_dyn_term = -torch.distributions.kl_divergence(term_1.detach(), term_2) * beta_dyn
+            l_rep_term = -torch.distributions.kl_divergence(term_1, term_2.detach()) * beta_rep
 
+            loss = l_pred + l_dyn_term + l_rep_term
 
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
+            print(f"Loss: {loss.item()}")
 
-
-
-            
-            
-            
 
 if __name__ == "__main__":
     train_world_model()
