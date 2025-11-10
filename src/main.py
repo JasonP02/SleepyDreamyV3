@@ -64,8 +64,8 @@ def main():
             world_model(obs_tensor, action_onehot)
 
             step_count += 1
-            episode_reward += reward
-            total_reward += reward
+            episode_reward += float(reward)
+            total_reward += float(reward)
 
             if terminated or truncated or step_count >= config.train.num_episodes:
                 break
@@ -74,4 +74,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

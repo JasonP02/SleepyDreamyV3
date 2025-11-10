@@ -1,28 +1,29 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.distributions as dist
 import h5py
-from torch.utils.data import Dataset, DataLoader
-from .config import config
-from .world_model import RSSMWorldModel
 import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+
+from .config import config
+from .trainer_utils import symlog
+from .world_model import RSSMWorldModel
 
 
 class TrajectoryDataset(Dataset):
-    def __init__(self, h5_path, sequence_length=50):
+    def __init__(self, h5_path, sequence_length: int = 50):
         self.h5_path = h5_path
         self.sequence_length = sequence_length
 
         with h5py.File(self.h5_path, "r") as f:
             self.n_episodes = f.attrs["n_episodes"]
             self.ep_lengths = [
-                f[f"episodes/{i}"].attrs["n_steps"] for i in range(self.n_episodes)
+                f[f"episodes/{i}"].attrs["n_steps"]
+                for i in range(self.n_episodes)  # type:ignore
             ]
 
         self.cumulative_lengths = np.cumsum(
-            [l - self.sequence_length + 1 for l in self.ep_lengths]
+            [cum_len - self.sequence_length + 1 for cum_len in self.ep_lengths]
         )
 
     def __len__(self):
@@ -93,6 +94,7 @@ def train_world_model():
 
         pixels = batch["pixels"]  # (batch_size, sequence_length, 3, 64, 64)
         states = batch["state"]  # (batch_size, sequence_length, 8)
+        states = symlog(states)
         actions = batch["action"]  # (batch_size, sequence_length, 4)
 
         for t in range(pixels.shape[1]):
@@ -107,19 +109,25 @@ def train_world_model():
                 continue_dist,
             ) = world_model(obs_t, action_t)
 
+            # Distribution of mean pixel/observation values
+            # Observation pixels are bernoulli, while observation vectors are gaussian
             pixel_dist = obs_reconstruction["pixels"]
             state_dist = obs_reconstruction["state"]
+            pixel_sample = pixel_dist.sample()
+            state_sample = state_dist.sample()
+
+            pixel_target = obs_t[
+                "pixels"
+            ]  # pixel target is sigmoid activation over pixels
+            obs_target = obs_t["state"]  # obs target is a distribution of mean values
 
             # There are three loss terms:
             # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
+            # -ln p(x|z,h) is trained with symlog squared loss
+
             # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
             # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
             # Log-likelihoods. Torch accepts logits
-            posterior_ll = torch.log(pixel_dist.logits) + torch.log(state_dist.logits)
-            reward_ll = torch.log(reward_dist.logits)
-            continue_ll = torch.log(continue_dist.logits)
-
-            l_pred = (-posterior_ll - reward_ll + continue_ll) * beta_pred
 
             term_1 = posterior_dist.probs  # q(z|h,x)
             term_2 = prior_dist.probs  # p(z|h)
@@ -144,4 +152,3 @@ def train_world_model():
 
 if __name__ == "__main__":
     train_world_model()
-
