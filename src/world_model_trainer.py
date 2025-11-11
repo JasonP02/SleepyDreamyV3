@@ -1,12 +1,13 @@
 import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
 from .config import config
-from .trainer_utils import symlog
+from .trainer_utils import symlog, symexp, twohot_encode
 from .world_model import RSSMWorldModel
 
 
@@ -71,21 +72,18 @@ def train_world_model():
         cnn_config=config.models.encoder.cnn,
         env_config=config.environment,
         gru_config=config.models.rnn,
-        decoder_config=config.models.decoder,
         batch_size=config.train.batch_size,
+        b_start=config.train.b_start,
+        b_end=config.train.b_end,
     )
     optimizer = optim.Adam(world_model.parameters(), lr=1e-4)
+    bsz = config.train.batch_size
 
-    dataset = TrajectoryDataset(
-        config.general.env_bootstrapping_samples, sequence_length=50
-    )
-    dataloader = DataLoader(
-        dataset, batch_size=config.train.batch_size, shuffle=True, num_workers=4
-    )
+    dataset_path = config.general.env_bootstrapping_samples
+    dataset = TrajectoryDataset(dataset_path, sequence_length=50)
 
-    beta_dyn = config.train.beta_dyn
-    beta_rep = config.train.beta_rep
-    beta_pred = config.train.beta_pred
+    dataloader = DataLoader(dataset, batch_size=bsz, shuffle=True)
+
 
     for batch in dataloader:
         # Reset hidden states per trajectory
@@ -94,13 +92,14 @@ def train_world_model():
 
         pixels = batch["pixels"]  # (batch_size, sequence_length, 3, 64, 64)
         states = batch["state"]  # (batch_size, sequence_length, 8)
-        states = symlog(states)
+        states = symlog(states)  # symlog vector inputs before model input
         actions = batch["action"]  # (batch_size, sequence_length, 4)
+        rewards = batch["reward"]
 
         for t in range(pixels.shape[1]):
             obs_t = {"pixels": pixels[:, t], "state": states[:, t]}
             action_t = actions[:, t]
-
+            reward_t = rewards[:, t]
             (
                 obs_reconstruction,
                 posterior_dist,
@@ -111,19 +110,46 @@ def train_world_model():
 
             # Distribution of mean pixel/observation values
             # Observation pixels are bernoulli, while observation vectors are gaussian
-            pixel_dist = obs_reconstruction["pixels"]
-            state_dist = obs_reconstruction["state"]
-            pixel_sample = pixel_dist.sample()
-            state_sample = state_dist.sample()
+            pixel_probs = obs_reconstruction["pixels"]
+            obs_pred = obs_reconstruction["state"]
 
-            pixel_target = obs_t[
-                "pixels"
-            ]  # pixel target is sigmoid activation over pixels
-            obs_target = obs_t["state"]  # obs target is a distribution of mean values
+            pixel_target = obs_t["pixels"]
+            obs_target = obs_t["state"]
+            obs_target = symlog(obs_target)  # loss in symlog space
+
+            beta_dyn = config.train.beta_dyn
+            beta_rep = config.train.beta_rep
+            beta_pred = config.train.beta_pred
 
             # There are three loss terms:
             # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
             # -ln p(x|z,h) is trained with symlog squared loss
+            pred_loss_vector = 1 / 2 * (obs_pred - obs_target) ** 2
+
+            bce_loss_fn = nn.BCELoss()
+            pred_loss_pixel = bce_loss_fn(
+                input=pixel_probs, target=F.sigmoid(pixel_target)
+            )
+
+            reward_target = twohot_encode(reward_t)
+
+            beta_range = torch.arange(start=config.train.b_start,end=config.train.b_end)
+            B = symexp(beta_range)
+            reward_pred = reward_dist.T * B
+
+            reward_loss_fn = nn.CrossEntropyLoss()
+            reward_loss = reward_loss_fn(reward_pred, reward_target)
+
+            
+
+            pred_loss_reward = 
+
+            l_pred = (
+                -pred_loss_pixel
+                - pred_loss_vector
+                - pred_loss_reward
+                + pred_loss_continue
+            )
 
             # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
             # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]

@@ -43,14 +43,9 @@ class EncoderConfig(BaseModel):
     mlp: MLPEncoderConfig = MLPEncoderConfig()
 
 
-class DecoderConfig(BaseModel):
-    n_bins: int = 256
-
-
 class ModelsConfig(BaseModel):
     encoder: EncoderConfig = EncoderConfig()
     rnn: GRUConfig = GRUConfig()
-    decoder: DecoderConfig = DecoderConfig()
 
 
 class TrainConfig(BaseModel):
@@ -60,6 +55,8 @@ class TrainConfig(BaseModel):
     beta_dyn: float = 0.99
     beta_rep: float = 0.99
     beta_pred: float = 0.99
+    b_start: int = -20
+    b_end: int = 21
 
 
 class Config(BaseModel):

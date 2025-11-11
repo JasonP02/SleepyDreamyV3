@@ -26,8 +26,9 @@ def main():
         cnn_config=config.models.encoder.cnn,
         env_config=config.environment,
         gru_config=config.models.rnn,
-        decoder_config=config.models.decoder,
         batch_size=1,  # For inference, batch size is 1
+        b_start=config.train.b_start,
+        b_end=config.train.b_end,
     )
     world_model.load_state_dict(torch.load(checkpoint_path))
     print("World model loaded successfully.")

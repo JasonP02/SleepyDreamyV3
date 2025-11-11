@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.distributions as dist
+import torch.nn.functional as F
 
 
 class ObservationDecoder(nn.Module):
@@ -17,7 +17,6 @@ class ObservationDecoder(nn.Module):
         cnn_config,
         env_config,
         gru_config,
-        decoder_config,
     ):
         super().__init__()
         d_hidden = mlp_config.d_hidden
@@ -113,7 +112,7 @@ class ObservationCNNDecoder(nn.Module):
         x = x.view(-1, *self.first_layer_shape)
         x = self.deconv_blocks(x)  # (N, C , H, W)
 
-        return x
+        return F.sigmoid(x)
 
 
 class ObservationMLPDecoder(nn.Module):
@@ -138,4 +137,3 @@ class ObservationMLPDecoder(nn.Module):
     def forward(self, x):
         x = self.mlp(x)
         return x
-

@@ -2,12 +2,14 @@
 This marks what I have done, and what is to be done
 
 ## Current
-Implementing loss functions... 
-Need to ensure weight initalization is right for different parts of model
-Should consider breaking up the RSSM mode
+Implementing the reward predictor
+- weight init to zero
+- uses symexp loss  
+- p(r|h,z)
+- one layer mlp
 
 ## Next
-Add symlog transform to vector inputs
+Make the *reward* and *critic* weights initalize to zero
 
 
 ## Future
@@ -21,6 +23,10 @@ Add symlog transform to vector inputs
 
 
 ## Completed
+Implementing loss function for decoder & reward predictor
+- The image outputs a sigmoid which means we use BCE
+- The vector outputs a prediction of the action distribution  
+
 * Straight through gradients for passing sampled z into f(h)
 * Writing the GRU block-diagonal recurrent weights
 * Add tests for the GRU

@@ -16,9 +16,17 @@ class RSSMWorldModel(nn.Module):
     """
 
     def __init__(
-        self, mlp_config, cnn_config, env_config, gru_config, decoder_config, batch_size
+        self,
+        mlp_config,
+        cnn_config,
+        env_config,
+        gru_config,
+        batch_size,
+        b_start,
+        b_end,
     ):
         super().__init__()
+        self.d_hidden = mlp_config.d_hidden
         # Encoder
         self.encoder = ObservationEncoder(mlp_config=mlp_config, cnn_config=cnn_config)
 
@@ -31,22 +39,12 @@ class RSSMWorldModel(nn.Module):
                 GatedRecurrentUnit(d_in=gru_d_in, d_hidden=self.d_hidden)
             )
 
-        # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
-        self.decoder = ObservationDecoder(
-            mlp_config=mlp_config,
-            cnn_config=cnn_config,
-            env_config=env_config,
-            gru_config=gru_config,
-            decoder_config=decoder_config,
-        )
-
         # Outputs prior distribution \hat{z} from the sequence model
         n_gru_blocks = gru_config.n_blocks
         self.dynamics_predictor = DynamicsPredictor(
             d_in=self.d_hidden * n_gru_blocks, d_hidden=self.d_hidden
         )
 
-        self.d_hidden = mlp_config.d_hidden
         self.n_latents = mlp_config.d_hidden
         # Initalizing network params for t=0 ; h_0 is the zero matrix
         self.h_prev = torch.zeros(batch_size, self.d_hidden * n_gru_blocks)
@@ -62,8 +60,19 @@ class RSSMWorldModel(nn.Module):
         h_z_dim = (self.d_hidden * n_gru_blocks) + (
             self.d_hidden * (self.d_hidden // mlp_config.latent_categories)
         )
-        self.reward_predictor = nn.Linear(h_z_dim, 1)
+
+        # Rewards use two-hot encoding
+        reward_out = abs(b_start - b_end)
+        self.reward_predictor = nn.Linear(h_z_dim, reward_out)
         self.continue_predictor = nn.Linear(h_z_dim, 1)
+
+        # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
+        self.decoder = ObservationDecoder(
+            mlp_config=mlp_config,
+            cnn_config=cnn_config,
+            env_config=env_config,
+            gru_config=gru_config,
+        )
 
     def forward(self, x, a):
         """
@@ -111,7 +120,7 @@ class RSSMWorldModel(nn.Module):
         continue_logits = self.continue_predictor(h_z_joined)
 
         # Reward is gaussian. We output a distribution of mean values for symlog squared error
-        reward_dist = dist.Categorical(logits=reward_logits)
+        reward_dist = F.softmax(reward_logits)
 
         # Continue is categorical/bernoulli.
         continue_dist = dist.Categorical(logits=continue_logits)
