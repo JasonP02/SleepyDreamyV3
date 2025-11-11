@@ -8,8 +8,12 @@ Implementing the reward predictor
 - p(r|h,z)
 - one layer mlp
 
+Implementing twohot encoding and doing tests
+The codebase is out of control. We need more tests!:
+
 ## Next
 Make the *reward* and *critic* weights initalize to zero
+
 
 
 ## Future
