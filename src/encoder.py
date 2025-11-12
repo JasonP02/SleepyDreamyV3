@@ -41,7 +41,7 @@ class ObservationEncoder(nn.Module):
         vec_obs = x['state']
 
         x1 = self.CNN(image_obs)
-        x1 = x1.view(x1.size(0), -1) # Flatten all features
+        x1 = x1.reshape(x1.size(0), -1) # Flatten all features
 
         x2 = self.MLP(vec_obs)
         x = torch.cat((x1,x2), dim=1) # Join outputs along feature dimension

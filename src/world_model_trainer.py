@@ -49,7 +49,7 @@ class TrajectoryDataset(Dataset):
                 ep_group["vec_obs"][start_in_ep:end_in_ep]
             ).float()
             action = torch.from_numpy(ep_group["action"][start_in_ep:end_in_ep]).long()
-        reward = torch.from_numpy(ep_group["reward"][start_in_ep:end_in_ep]).float()
+            reward = torch.from_numpy(ep_group["reward"][start_in_ep:end_in_ep]).float()
 
         # The 'continue' flag is 1 if the episode is not terminated.
         # We check if the *next* step is terminal. The last step in a sequence
