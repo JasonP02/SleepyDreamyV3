@@ -107,8 +107,9 @@ class ObservationCNNEncoder(nn.Module):
                     )
                 )
             
-            # Add ReLU activation after each conv layer (except possibly the last one)
-            conv_layers.append(nn.ReLU())
+            # Add ReLU activation after each conv layer except the last one
+            if i < num_layers - 1:
+                conv_layers.append(nn.ReLU())
         
         # Wrap in Sequential for clean forward pass
         self.cnn_blocks = nn.Sequential(*conv_layers)

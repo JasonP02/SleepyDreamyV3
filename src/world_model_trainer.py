@@ -148,7 +148,7 @@ def train_world_model():
             # The decoder outputs logits, and the target should be in [0,1]
             pred_loss_pixel = bce_with_logits_loss_fn(input=pixel_probs, target=pixel_target / 255.0)
 
-            # b. reward predictor # TODO REVIEW
+            # b. reward predictor 
             beta_range = torch.arange(
                 start=config.train.b_start, end=config.train.b_end, device=reward_t.device
             )

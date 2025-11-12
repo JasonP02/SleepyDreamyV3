@@ -83,6 +83,7 @@ class RSSMWorldModel(nn.Module):
         """
         # 1. Get distribution z
         posterior_logits = self.encoder(x)  # (batch_size, latents, bins_per_latent)
+        print(posterior_logits)
         posterior_dist = dist.Categorical(logits=posterior_logits)
 
         # 2. Apply straight-through method (sample while keeping gradients)
@@ -104,6 +105,7 @@ class RSSMWorldModel(nn.Module):
 
         # 4. Get leraned representation \hat{z}
         prior_logits = self.dynamics_predictor(h)
+        print(prior_logits)
         prior_dist = dist.Categorical(logits=prior_logits)
 
         self.h_prev = h
@@ -121,9 +123,6 @@ class RSSMWorldModel(nn.Module):
 
         # Reward is categorical over bins. We return logits for CrossEntropyLoss.
         reward_dist = reward_logits
-
-        # Continue is categorical/bernoulli.
-        continue_dist = dist.Bernoulli(logits=continue_logits)
 
         return (
             obs_reconstruction,
