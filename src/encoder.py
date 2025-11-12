@@ -2,11 +2,13 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+
 class ObservationEncoder(nn.Module):
-    def __init__(self,
-                 mlp_config,
-                 cnn_config,
-                 ):
+    def __init__(
+        self,
+        mlp_config,
+        cnn_config,
+    ):
         super().__init__()
         self.MLP = ObservationMLPEncoder(
             d_in=8,
@@ -21,21 +23,23 @@ class ObservationEncoder(nn.Module):
             d_hidden=mlp_config.d_hidden,
             hidden_dim_ratio=mlp_config.hidden_dim_ratio,
             num_layers=cnn_config.num_layers,
-            final_feature_size=cnn_config.final_feature_size
+            final_feature_size=cnn_config.final_feature_size,
         )
 
         self.latents = mlp_config.d_hidden
         # Use dynamic calculation based on actual config parameters
         n_channels = int(mlp_config.d_hidden / mlp_config.hidden_dim_ratio)
-        cnn_out_features = (n_channels * 2**(cnn_config.num_layers-1)) * cnn_config.final_feature_size**2
-        encoder_out = cnn_out_features + mlp_config.d_hidden # CNN + MLP
+        cnn_out_features = (
+            n_channels * 2 ** (cnn_config.num_layers - 1)
+        ) * cnn_config.final_feature_size**2
+        encoder_out = cnn_out_features + mlp_config.d_hidden  # CNN + MLP
         self.latent_categories = mlp_config.latent_categories
-        
-        # Paper 
+
+        # Paper
         logit_out = self.latents * (self.latents // self.latent_categories)
         self.logit_layer = nn.Linear(in_features=encoder_out, out_features=logit_out)
 
-    def forward(self, x) -> torch.tensor:
+    def forward(self, x):
         # x is passed as a dict of ['state', 'pixels']
         image_obs = x['pixels']
         vec_obs = x['state']
@@ -52,23 +56,26 @@ class ObservationEncoder(nn.Module):
 
         # Return logits directly. The Categorical distribution will handle the softmax.
         return x
-        
+
+
 class ObservationCNNEncoder(nn.Module):
     """
     Observations are compressed dynamically based on config.
     Uses a series of convolutions with doubling channel progression.
     """
-    def __init__(self,
-                 target_size,
-                 in_channels,
-                 kernel_size,
-                 stride,
-                 padding,
-                 d_hidden,
-                 hidden_dim_ratio=16,
-                 num_layers=4,
-                 final_feature_size=4
-                 ):
+
+    def __init__(
+        self,
+        target_size,
+        in_channels,
+        kernel_size,
+        stride,
+        padding,
+        d_hidden,
+        hidden_dim_ratio=16,
+        num_layers=4,
+        final_feature_size=4,
+    ):
         super().__init__()
         self.target_size = target_size
         self.num_layers = num_layers
@@ -76,10 +83,10 @@ class ObservationCNNEncoder(nn.Module):
 
         # Calculate base channel count from hidden dim ratio
         base_channels = int(d_hidden / hidden_dim_ratio)
-        
+
         # Build sequential layers with ReLU activation after each conv
         conv_layers = []
-        
+
         for i in range(num_layers):
             if i == 0:
                 # First layer: input_channels -> base_channels
@@ -90,12 +97,12 @@ class ObservationCNNEncoder(nn.Module):
                         out_channels=out_ch,
                         kernel_size=kernel_size,
                         stride=stride,
-                        padding=padding
+                        padding=padding,
                     )
                 )
             else:
                 # Subsequent layers: base_channels*2^(i-1) -> base_channels*2^i
-                out_ch = base_channels * (2 ** i)
+                out_ch = base_channels * (2**i)
                 in_ch = base_channels * (2 ** (i - 1))
                 conv_layers.append(
                     nn.Conv2d(
@@ -103,14 +110,14 @@ class ObservationCNNEncoder(nn.Module):
                         out_channels=out_ch,
                         kernel_size=kernel_size,
                         stride=stride,
-                        padding=padding
+                        padding=padding,
                     )
                 )
-            
+
             # Add ReLU activation after each conv layer except the last one
             if i < num_layers - 1:
                 conv_layers.append(nn.ReLU())
-        
+
         # Wrap in Sequential for clean forward pass
         self.cnn_blocks = nn.Sequential(*conv_layers)
 
@@ -119,30 +126,33 @@ class ObservationCNNEncoder(nn.Module):
         x = F.interpolate(
             input=x,
             size=self.target_size,
-            mode='bilinear',
+            mode="bilinear",
         )
 
         # Apply ReLU + convolution sequentially
         x = self.cnn_blocks(x)
         return x
 
+
 class ObservationMLPEncoder(nn.Module):
     """
     Observations are encoded with 3-layer MLP
     Input state is a vector of size 8
     """
-    def __init__(self,
-               d_in,
-               d_hidden,
-               ):
+
+    def __init__(
+        self,
+        d_in,
+        d_hidden,
+    ):
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(d_in, d_hidden, bias=True),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(d_hidden, d_hidden, bias=True),
-            nn.ReLU(),
-            nn.Linear(d_hidden, d_hidden, bias=True)
+            nn.SiLU(),
+            nn.Linear(d_hidden, d_hidden, bias=True),
         )
-    
+
     def forward(self, x):
         return self.mlp(x)

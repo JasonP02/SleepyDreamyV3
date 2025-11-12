@@ -2,7 +2,7 @@ import torch
 
 
 def symlog(x):
-    out = torch.sign(x) * (torch.log(torch.abs(x)) + 1)
+    out = torch.sign(x) * (torch.log(torch.abs(x) + 1))
     return out
 
 
@@ -18,37 +18,42 @@ def symexp(x):
 # The network is then trained to minimize the categorical cross entropy loss for classification with
 # soft targets
 def twohot_encode(x, B):
-    # B is a vector of exponentially spaced values
-    # x is a tensor of size (batch)
-    # We want to find the two values of B that are closest to x
-    x = x.unsqueeze(-1)  # (batch, 1)
-    B = B.unsqueeze(0)   # (1, n_bins)
-
-    # 1. Handle values outside the range of B
+    # B is a 1D tensor of bin edges.
+    # x is a 1D tensor of values to encode.
+    
     # Clamp values to be within the range of B
-    x_clamped = torch.clamp(x, B.min(), B.max())
+    x = torch.clamp(x, B.min(), B.max())
 
-    # 2. Find the index of the right bin
-    # `torch.searchsorted` gives the index of the bucket where the value would be inserted.
-    # This corresponds to the right bin.
-    right_bin_indices = torch.searchsorted(B.squeeze(0), x_clamped.squeeze(-1)).unsqueeze(-1)
+    # Find the index of the bin to the right of each value
+    # The result of searchsorted is the index of the first element in B that is >= x
+    right_bin_indices = torch.searchsorted(B, x)
 
-    # Ensure left bin indices are not less than 0
+    # The left bin is the one before it. Clamp at 0 for safety.
     left_bin_indices = torch.clamp(right_bin_indices - 1, 0)
+    
+    # Handle cases where right_bin_indices might be out of bounds if x matches B.max()
+    right_bin_indices = torch.clamp(right_bin_indices, 0, len(B)-1)
 
-    # 3. Get the values of the left and right bins
-    bin_left = torch.gather(B.expand_as(x), 1, left_bin_indices)
-    bin_right = torch.gather(B.expand_as(x), 1, right_bin_indices)
+    # Get the values of the left and right bin edges
+    bin_left = B[left_bin_indices]
+    bin_right = B[right_bin_indices]
 
-    # 4. Calculate weights
-    # Avoid division by zero if bin_left and bin_right are the same
+    # Calculate weights
+    # Avoid division by zero if a value falls exactly on a bin edge
     denom = bin_right - bin_left
     denom[denom == 0] = 1.0
-    weight_right = (x_clamped - bin_left) / denom
+    
+    weight_right = (x - bin_left) / denom
     weight_left = 1.0 - weight_right
 
-    # 5. Create the two-hot encoded tensor
-    weights = torch.zeros(x.shape[0], B.shape[1], device=x.device)
-    weights.scatter_(1, left_bin_indices, weight_left)
-    weights.scatter_add_(1, right_bin_indices, weight_right)
+    # Create the two-hot encoded tensor
+    batch_size = x.size(0)
+    n_bins = B.size(0)
+    weights = torch.zeros(batch_size, n_bins, device=x.device)
+
+    # Use scatter to place the weights in the correct locations
+    weights.scatter_(1, left_bin_indices.unsqueeze(1), weight_left.unsqueeze(1))
+    # Use scatter_add_ for the right bin in case left and right indices are the same
+    weights.scatter_add_(1, right_bin_indices.unsqueeze(1), weight_right.unsqueeze(1))
+    
     return weights

@@ -174,8 +174,12 @@ def train_world_model():
             
             # Note: The paper uses "free bits" here, which is a max(1, kl) term.
             # This is a simpler implementation without it for now.
-            l_dyn = torch.distributions.kl_divergence(posterior_dist.detach(), prior_dist).mean()
-            l_rep = torch.distributions.kl_divergence(posterior_dist, prior_dist.detach()).mean()
+            l_dyn = torch.distributions.kl_divergence(
+                torch.distributions.Categorical(logits=posterior_dist.logits.detach()), prior_dist
+            ).mean()
+            l_rep = torch.distributions.kl_divergence(
+                posterior_dist, torch.distributions.Categorical(logits=prior_dist.logits.detach())
+            ).mean()
 
             loss = beta_pred * l_pred + beta_dyn * l_dyn + beta_rep * l_rep
 

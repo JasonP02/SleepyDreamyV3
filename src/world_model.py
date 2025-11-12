@@ -64,6 +64,7 @@ class RSSMWorldModel(nn.Module):
         # Rewards use two-hot encoding
         reward_out = abs(b_start - b_end)
         self.reward_predictor = nn.Linear(h_z_dim, reward_out)
+        nn.init.zeros_(self.reward_predictor.weight)  # Reward is initalized to zero
         self.continue_predictor = nn.Linear(h_z_dim, 1)
 
         # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
@@ -83,7 +84,6 @@ class RSSMWorldModel(nn.Module):
         """
         # 1. Get distribution z
         posterior_logits = self.encoder(x)  # (batch_size, latents, bins_per_latent)
-        print(posterior_logits)
         posterior_dist = dist.Categorical(logits=posterior_logits)
 
         # 2. Apply straight-through method (sample while keeping gradients)
@@ -105,7 +105,6 @@ class RSSMWorldModel(nn.Module):
 
         # 4. Get leraned representation \hat{z}
         prior_logits = self.dynamics_predictor(h)
-        print(prior_logits)
         prior_dist = dist.Categorical(logits=prior_logits)
 
         self.h_prev = h

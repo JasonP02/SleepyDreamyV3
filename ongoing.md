@@ -1,32 +1,24 @@
-# Ongoing
 This marks what I have done, and what is to be done
 
-## Current
-Implementing the reward predictor
-- weight init to zero
-- uses symexp loss  
-- p(r|h,z)
-- one layer mlp
-
-Implementing twohot encoding and doing tests
-The codebase is out of control. We need more tests!:
+# Ongoing
 
 ## Next
-Make the *reward* and *critic* weights initalize to zero
+Try overfitting world model on single batch
 
 
 
 ## Future
 * Use 99% softmax, 1% uniform for the encoder, predictor, actor
-* Implement twohot 
 * Implement free bits
 * Implement critic learning
 * Implement Actor learning
-* Implement symlog and symexp for loss
 * Ensure that weight initalizations are consistent with the paper.
+* Check the use of KL divergence and distributions in general
 
 
 ## Completed
+- Initial training loop
+- Twohot encoding
 Implementing loss function for decoder & reward predictor
 - The image outputs a sigmoid which means we use BCE
 - The vector outputs a prediction of the action distribution  
