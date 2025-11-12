@@ -112,7 +112,7 @@ class ObservationCNNDecoder(nn.Module):
         x = x.view(-1, *self.first_layer_shape)
         x = self.deconv_blocks(x)  # (N, C , H, W)
 
-        return F.sigmoid(x)
+        return x
 
 
 class ObservationMLPDecoder(nn.Module):

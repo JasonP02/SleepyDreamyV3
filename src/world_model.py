@@ -119,18 +119,18 @@ class RSSMWorldModel(nn.Module):
         reward_logits = self.reward_predictor(h_z_joined)
         continue_logits = self.continue_predictor(h_z_joined)
 
-        # Reward is gaussian. We output a distribution of mean values for symlog squared error
-        reward_dist = F.softmax(reward_logits)
+        # Reward is categorical over bins. We return logits for CrossEntropyLoss.
+        reward_dist = reward_logits
 
         # Continue is categorical/bernoulli.
-        continue_dist = dist.Categorical(logits=continue_logits)
+        continue_dist = dist.Bernoulli(logits=continue_logits)
 
         return (
             obs_reconstruction,
             posterior_dist,
             prior_dist,
             reward_dist,
-            continue_dist,
+            continue_logits,
         )
 
     def join_h_and_z(self, h, z):

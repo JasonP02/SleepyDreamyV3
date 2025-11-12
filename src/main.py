@@ -10,7 +10,6 @@ from .config import config
 
 def main():
     env = create_env_with_vision()
-
     checkpoint_path = config.general.world_model_path
     if not os.path.exists(config.general.env_bootstrapping_samples):
         print("Bootstrap samples not found. Collecting now...")
@@ -19,7 +18,7 @@ def main():
     if config.general.train_world_model or not os.path.exists(checkpoint_path):
         print("Training world model...")
         train_world_model()
-
+        
     print("Loading trained world model...")
     world_model = RSSMWorldModel(
         mlp_config=config.models.encoder.mlp,

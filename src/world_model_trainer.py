@@ -49,16 +49,30 @@ class TrajectoryDataset(Dataset):
                 ep_group["vec_obs"][start_in_ep:end_in_ep]
             ).float()
             action = torch.from_numpy(ep_group["action"][start_in_ep:end_in_ep]).long()
+        reward = torch.from_numpy(ep_group["reward"][start_in_ep:end_in_ep]).float()
 
-            # Pixels are (T, H, W, C), need to be (T, C, H, W)
-            pixels = pixels.permute(0, 3, 1, 2)
+        # The 'continue' flag is 1 if the episode is not terminated.
+        # We check if the *next* step is terminal. The last step in a sequence
+        # is always considered terminal for the purpose of the continue predictor.
+        terminated = torch.zeros(self.sequence_length, dtype=torch.float32)
+        if end_in_ep >= self.ep_lengths[ep_idx]:
+            terminated[-1] = 1.0  # Episode ends within this sequence
 
-            # Actions need to be one-hot encoded
-            action_onehot = F.one_hot(
-                action, num_classes=config.environment.n_actions
-            ).float()
+        # Pixels are (T, H, W, C), need to be (T, C, H, W)
+        pixels = pixels.permute(0, 3, 1, 2)
 
-        return {"pixels": pixels, "state": vec_obs, "action": action_onehot}
+        # Actions need to be one-hot encoded
+        action_onehot = F.one_hot(
+            action, num_classes=config.environment.n_actions
+        ).float()
+
+        return {
+            "pixels": pixels,
+            "state": vec_obs,
+            "action": action_onehot,
+            "reward": reward,
+            "terminated": terminated,
+        }
 
 
 def train_world_model():
@@ -95,17 +109,19 @@ def train_world_model():
         states = symlog(states)  # symlog vector inputs before model input
         actions = batch["action"]  # (batch_size, sequence_length, 4)
         rewards = batch["reward"]
+        terminated = batch["terminated"]
 
         for t in range(pixels.shape[1]):
             obs_t = {"pixels": pixels[:, t], "state": states[:, t]}
             action_t = actions[:, t]
             reward_t = rewards[:, t]
+            terminated_t = terminated[:, t]
             (
                 obs_reconstruction,
                 posterior_dist,
                 prior_dist,
                 reward_dist,
-                continue_dist,
+                continue_logits,
             ) = world_model(obs_t, action_t)
 
             # Distribution of mean pixel/observation values
@@ -123,33 +139,31 @@ def train_world_model():
 
             # There are three loss terms:
             # 1. Prediction loss: -ln p(x|z,h) - ln(p(r|z,h)) + ln(p(c|z,h))
+            # a. dynamics represetnation
             # -ln p(x|z,h) is trained with symlog squared loss
             pred_loss_vector = 1 / 2 * (obs_pred - obs_target) ** 2
+            pred_loss_vector = pred_loss_vector.mean()
 
-            bce_loss_fn = nn.BCELoss()
-            pred_loss_pixel = bce_loss_fn(
-                input=pixel_probs, target=F.sigmoid(pixel_target)
+            bce_with_logits_loss_fn = nn.BCEWithLogitsLoss()
+            # The decoder outputs logits, and the target should be in [0,1]
+            pred_loss_pixel = bce_with_logits_loss_fn(input=pixel_probs, target=pixel_target / 255.0)
+
+            # b. reward predictor # TODO REVIEW
+            beta_range = torch.arange(
+                start=config.train.b_start, end=config.train.b_end, device=reward_t.device
             )
-
-            reward_target = twohot_encode(reward_t)
-
-            beta_range = torch.arange(start=config.train.b_start,end=config.train.b_end)
             B = symexp(beta_range)
-            reward_pred = reward_dist.T * B
-
+            reward_target = twohot_encode(reward_t, B)
             reward_loss_fn = nn.CrossEntropyLoss()
-            reward_loss = reward_loss_fn(reward_pred, reward_target)
+            reward_loss = reward_loss_fn(reward_dist, reward_target)
 
-            
+            # c. continue predictor
+            # The target is 1 if we continue, 0 if we terminate.
+            continue_target = (1.0 - terminated_t).unsqueeze(-1)
+            pred_loss_continue = bce_with_logits_loss_fn(continue_logits.squeeze(-1), continue_target.squeeze(-1))
 
-            pred_loss_reward = 
-
-            l_pred = (
-                -pred_loss_pixel
-                - pred_loss_vector
-                - pred_loss_reward
-                + pred_loss_continue
-            )
+            # Prediction loss is the sum of the individual losses
+            l_pred = pred_loss_pixel + pred_loss_vector + reward_loss + pred_loss_continue
 
             # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
             # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
@@ -157,21 +171,17 @@ def train_world_model():
 
             term_1 = posterior_dist.probs  # q(z|h,x)
             term_2 = prior_dist.probs  # p(z|h)
+            
+            # Note: The paper uses "free bits" here, which is a max(1, kl) term.
+            # This is a simpler implementation without it for now.
+            l_dyn = torch.distributions.kl_divergence(posterior_dist.detach(), prior_dist).mean()
+            l_rep = torch.distributions.kl_divergence(posterior_dist, prior_dist.detach()).mean()
 
-            l_dyn_term = (
-                -torch.distributions.kl_divergence(term_1.detach(), term_2) * beta_dyn
-            )
-            l_rep_term = (
-                -torch.distributions.kl_divergence(term_1, term_2.detach()) * beta_rep
-            )
-
-            loss = l_pred + l_dyn_term + l_rep_term
+            loss = beta_pred * l_pred + beta_dyn * l_dyn + beta_rep * l_rep
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-            # test
 
             print(f"Loss: {loss.item()}")
 
