@@ -19,32 +19,36 @@ def symexp(x):
 # soft targets
 def twohot_encode(x, B):
     # B is a vector of exponentially spaced values
-    # x is a vector of size (batch)
+    # x is a tensor of size (batch)
     # We want to find the two values of B that are closest to x
-    out = torch.zeros(x.shape[0], B.shape[0])
+    x = x.unsqueeze(-1)  # (batch, 1)
+    B = B.unsqueeze(0)   # (1, n_bins)
 
-    # 1. if x is outside of B, we just set x=b
-    # if x smaller than b[0], we want out[batch,0] to be 1
-    # x < B[0] returns a boolean tensor where 1 indicates x < B[0] for that batch value
-    # We can then push in this tensor to
-    mask_left = x < B[0]
-    mask_right = x > B[-1]
-    print(out.shape)
-    out[:, 0] = mask_left
-    out[:, -1] = mask_right
+    # 1. Handle values outside the range of B
+    # Clamp values to be within the range of B
+    x_clamped = torch.clamp(x, B.min(), B.max())
 
-    # 2. if x is inside B, then we need to search over it via bisection
-    # We can safely take the found index, and bin to the left as our k, and k+1 bins
-    index = torch.searchsorted(sorted_sequence=B, input=x)
+    # 2. Find the index of the right bin
+    # `torch.searchsorted` gives the index of the bucket where the value would be inserted.
+    # This corresponds to the right bin.
+    right_bin_indices = torch.searchsorted(B.squeeze(0), x_clamped.squeeze(-1)).unsqueeze(-1)
 
-    bin1 = B[index]
+    # Ensure left bin indices are not less than 0
+    left_bin_indices = torch.clamp(right_bin_indices - 1, 0)
 
-    zero_mask = index == 0:
-    out[index] = 1
+    # 3. Get the values of the left and right bins
+    bin_left = torch.gather(B.expand_as(x), 1, left_bin_indices)
+    bin_right = torch.gather(B.expand_as(x), 1, right_bin_indices)
 
-    bin2 = B[index - 1]
+    # 4. Calculate weights
+    # Avoid division by zero if bin_left and bin_right are the same
+    denom = bin_right - bin_left
+    denom[denom == 0] = 1.0
+    weight_right = (x_clamped - bin_left) / denom
+    weight_left = 1.0 - weight_right
 
-    out[index] = (x - bin2) / (bin1 - bin2)
-    out[index - 1] = (bin1 - x) / (bin1 - bin2)
-
-    return out
+    # 5. Create the two-hot encoded tensor
+    weights = torch.zeros(x.shape[0], B.shape[1], device=x.device)
+    weights.scatter_(1, left_bin_indices, weight_left)
+    weights.scatter_add_(1, right_bin_indices, weight_right)
+    return weights

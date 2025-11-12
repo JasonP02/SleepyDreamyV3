@@ -11,5 +11,9 @@ def test_twohot_encode():
     bsz = 15
     x = torch.rand(bsz)
 
-    pred = twohot_encode(torch.tensor(x), B)
-    print(pred)
+    weights = twohot_encode(x, B)
+
+    # Check that the output shape is correct
+    assert weights.shape == (bsz, len(B))
+    # Check that the weights for each sample sum to 1
+    assert torch.allclose(weights.sum(dim=1), torch.ones(bsz))
