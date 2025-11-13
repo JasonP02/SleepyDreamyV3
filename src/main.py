@@ -9,6 +9,9 @@ from .config import config
 
 
 def main():
+    device = torch.device(config.general.device)
+    print(f"Using device: {device}")
+
     env = create_env_with_vision()
     checkpoint_path = config.general.world_model_path
     if not os.path.exists(config.general.env_bootstrapping_samples):
@@ -29,7 +32,8 @@ def main():
         b_start=config.train.b_start,
         b_end=config.train.b_end,
     )
-    world_model.load_state_dict(torch.load(checkpoint_path))
+    world_model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    world_model.to(device)
     print("World model loaded successfully.")
 
     for episode in range(config.train.num_episodes):
@@ -39,17 +43,17 @@ def main():
         total_reward = 0
 
         # Reset world model hidden state at the start of each episode
-        world_model.h_prev.zero_()
+        world_model.h_prev = torch.zeros_like(world_model.h_prev).to(device)
 
         while True:
             action = env.action_space.sample()
             action_onehot = F.one_hot(
                 torch.tensor([action]), num_classes=config.environment.n_actions
-            ).float()
+            ).float().to(device)
             obs, reward, terminated, truncated, info = env.step(action)
 
             # Convert numpy arrays to torch tensors and fix format
-            pixels = torch.from_numpy(obs["pixels"]).float()
+            pixels = torch.from_numpy(obs["pixels"]).float().to(device)
             # If pixels is (H, W, C), convert to (N, C, H, W)
             if pixels.dim() == 3:  # (H, W, C)
                 pixels = pixels.permute(2, 0, 1).unsqueeze(0)  # -> (1, C, H, W)
@@ -57,8 +61,8 @@ def main():
             obs_tensor = {
                 "pixels": pixels,
                 "state": torch.from_numpy(obs["state"])
-                .float()
-                .unsqueeze(0),  # Add batch dim
+                .float().to(device)
+                .unsqueeze(0),  # Add batch dim,
             }
 
             world_model(obs_tensor, action_onehot)

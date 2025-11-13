@@ -31,7 +31,7 @@ class RSSMWorldModel(nn.Module):
         self.encoder = ObservationEncoder(mlp_config=mlp_config, cnn_config=cnn_config)
 
         # GatedRecurrentUnit | Uses 8 blocks to make a pseudo-large network
-        self.blocks = []
+        self.blocks = nn.ModuleList()
         self.n_blocks = gru_config.n_blocks
         gru_d_in = self.d_hidden + env_config.n_actions
         for _ in range(self.n_blocks):
@@ -47,10 +47,12 @@ class RSSMWorldModel(nn.Module):
 
         self.n_latents = mlp_config.d_hidden
         # Initalizing network params for t=0 ; h_0 is the zero matrix
-        self.h_prev = torch.zeros(batch_size, self.d_hidden * n_gru_blocks)
-        self.h_prev_blocks = torch.split(self.h_prev, self.d_hidden, dim=-1)
-        self.z_prev = torch.zeros((batch_size, self.d_hidden, int(self.d_hidden / 16)))
+        h_prev = torch.zeros(batch_size, self.d_hidden * n_gru_blocks)
+        self.register_buffer("h_prev", h_prev)
+        z_prev = torch.zeros((batch_size, self.d_hidden, int(self.d_hidden / 16)))
+        self.register_buffer("z_prev", z_prev)
 
+        self.h_prev_blocks = torch.split(self.h_prev, self.d_hidden, dim=-1)
         # Linear layer to project categorical sample to embedding dimension
         self.z_embedding = nn.Linear(
             self.d_hidden * (self.d_hidden // 16), self.d_hidden
@@ -98,6 +100,7 @@ class RSSMWorldModel(nn.Module):
         # 3. Pass representation into GRU
         outputs = []
         for i, block in enumerate(self.blocks):
+            self.h_prev_blocks = torch.split(self.h_prev, self.d_hidden, dim=-1)
             h_i = block(z_embed, a, self.h_prev_blocks[i])
             outputs.append(h_i)
 

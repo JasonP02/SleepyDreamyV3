@@ -1,10 +1,21 @@
 # config.py
 from pydantic import BaseModel
 from typing import Tuple
+import torch
+
+
+def get_default_device():
+    """Checks for available hardware accelerators."""
+    if torch.cuda.is_available():
+        # This works for both NVIDIA (CUDA) and AMD (ROCm)
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 class GeneralConfig(BaseModel):
-    device: str = "cuda"
+    device: str = get_default_device()
     world_model_path: str = "world_model.pt"
     train_world_model: bool = True
     env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
@@ -30,7 +41,7 @@ class CNNEncoderConfig(BaseModel):
 class MLPEncoderConfig(BaseModel):
     hidden_dim_ratio: int = 16
     n_layers: int = 3
-    d_hidden: int = 1024
+    d_hidden: int = 256
     latent_categories: int = 16  # Number of categories per latent variable
 
 

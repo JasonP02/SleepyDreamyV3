@@ -10,3 +10,4 @@ wheels/
 .venv
 DreamerPaper.pdf
 *.h5
+*.pt
