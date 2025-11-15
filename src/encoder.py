@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+
 class ObservationEncoder(nn.Module):
     def __init__(
         self,
@@ -40,14 +41,14 @@ class ObservationEncoder(nn.Module):
 
     def forward(self, x):
         # x is passed as a dict of ['state', 'pixels']
-        image_obs = x['pixels']
-        vec_obs = x['state']
+        image_obs = x["pixels"]
+        vec_obs = x["state"]
 
         x1 = self.CNN(image_obs)
-        x1 = x1.reshape(x1.size(0), -1) # Flatten all features
+        x1 = x1.reshape(x1.size(0), -1)  # Flatten all features
 
         x2 = self.MLP(vec_obs)
-        x = torch.cat((x1,x2), dim=1) # Join outputs along feature dimension
+        x = torch.cat((x1, x2), dim=1)  # Join outputs along feature dimension
 
         # feed this through a network to get out code * latent size
         x = self.logit_layer(x)
@@ -143,6 +144,7 @@ class ThreeLayerMLP(nn.Module):
         self,
         d_in,
         d_hidden,
+        d_out,
     ):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -150,7 +152,7 @@ class ThreeLayerMLP(nn.Module):
             nn.SiLU(),
             nn.Linear(d_hidden, d_hidden, bias=True),
             nn.SiLU(),
-            nn.Linear(d_hidden, d_hidden, bias=True),
+            nn.Linear(d_hidden, d_out, bias=True),
         )
 
     def forward(self, x):

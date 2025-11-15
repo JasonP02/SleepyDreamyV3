@@ -23,7 +23,7 @@ def main():
     if config.general.train_world_model or not os.path.exists(checkpoint_path):
         print("Training world model...")
         train_world_model()
-        
+
     print("Loading trained world model...")
     world_model = RSSMWorldModel(
         mlp_config=config.models.encoder.mlp,
@@ -35,18 +35,20 @@ def main():
         b_end=config.train.b_end,
     )
     world_model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    world_model.to(device)
     actor = ThreeLayerMLP(
         d_in=config.environment.n_observations,
-        d_hidden=config.models.actor.d_hidden,
+        d_hidden=config.models.encoder.mlp.d_hidden,
         d_out=config.environment.n_actions,
     )
     critic = ThreeLayerMLP(
         d_in=config.environment.n_observations,
-        d_hidden=config.models.critic.d_hidden,
+        d_hidden=config.models.encoder.mlp.d_hidden,
         d_out=1,
     )
     print("World model loaded successfully.")
+    world_model.to(device)
+    actor.to(device)
+    critic.to(device)
 
     for episode in range(config.train.num_episodes):
         obs, info = env.reset()
@@ -59,9 +61,13 @@ def main():
 
         while True:
             action = env.action_space.sample()
-            action_onehot = F.one_hot(
-                torch.tensor([action]), num_classes=config.environment.n_actions
-            ).float().to(device)
+            action_onehot = (
+                F.one_hot(
+                    torch.tensor([action]), num_classes=config.environment.n_actions
+                )
+                .float()
+                .to(device)
+            )
             obs, reward, terminated, truncated, info = env.step(action)
 
             # Convert numpy arrays to torch tensors and fix format
@@ -73,7 +79,8 @@ def main():
             obs_tensor = {
                 "pixels": pixels,
                 "state": torch.from_numpy(obs["state"])
-                .float().to(device)
+                .float()
+                .to(device)
                 .unsqueeze(0),  # Add batch dim,
             }
 

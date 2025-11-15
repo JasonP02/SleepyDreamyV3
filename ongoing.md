@@ -3,15 +3,12 @@ This marks what I have done, and what is to be done
 # Ongoing
 
 ## Next
-Try overfitting world model on single batch
+Implementing the actor critic network
 
 
 
 ## Future
 * Use 99% softmax, 1% uniform for the encoder, predictor, actor
-* Implement free bits
-* Implement critic learning
-* Implement Actor learning
 * Ensure that weight initalizations are consistent with the paper.
 * Check the use of KL divergence and distributions in general
 
@@ -22,7 +19,6 @@ Try overfitting world model on single batch
 Implementing loss function for decoder & reward predictor
 - The image outputs a sigmoid which means we use BCE
 - The vector outputs a prediction of the action distribution  
-
 * Straight through gradients for passing sampled z into f(h)
 * Writing the GRU block-diagonal recurrent weights
 * Add tests for the GRU

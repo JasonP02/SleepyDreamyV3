@@ -37,7 +37,9 @@ class TrajectoryDataset(Dataset):
             ep_len = ep_group.attrs["n_steps"]
 
             pixels = torch.from_numpy(ep_group["pixels"][start_in_ep:end_in_ep]).float()
-            vec_obs = torch.from_numpy(ep_group["vec_obs"][start_in_ep:end_in_ep]).float()
+            vec_obs = torch.from_numpy(
+                ep_group["vec_obs"][start_in_ep:end_in_ep]
+            ).float()
             action = torch.from_numpy(ep_group["action"][start_in_ep:end_in_ep]).long()
             reward = torch.from_numpy(ep_group["reward"][start_in_ep:end_in_ep]).float()
 
@@ -88,16 +90,20 @@ def train_world_model():
     bsz = config.train.batch_size
 
     dataset_path = config.general.env_bootstrapping_samples
-    dataset = TrajectoryDataset(dataset_path, sequence_length=config.train.sequence_length)
+    dataset = TrajectoryDataset(
+        dataset_path, sequence_length=config.train.sequence_length
+    )
 
     dataloader = DataLoader(dataset, batch_size=bsz, shuffle=True)
-    
+
     num_epochs = config.train.num_bootstrap_epochs
     for epoch in range(num_epochs):
-        print(f"--- Epoch {epoch+1}/{num_epochs} ---")
+        print(f"--- Epoch {epoch + 1}/{num_epochs} ---")
         for batch_idx, batch in enumerate(dataloader):
             # Move batch to device
-            pixels = batch["pixels"].to(device)  # (batch_size, sequence_length, 3, 64, 64)
+            pixels = batch["pixels"].to(
+                device
+            )  # (batch_size, sequence_length, 3, 64, 64)
             states = batch["state"].to(device)  # (batch_size, sequence_length, 8)
             actions = batch["action"].to(device)  # (batch_size, sequence_length, 4)
             rewards = batch["reward"].to(device)
@@ -153,11 +159,15 @@ def train_world_model():
 
                 bce_with_logits_loss_fn = nn.BCEWithLogitsLoss()
                 # The decoder outputs logits, and the target should be in [0,1]
-                pred_loss_pixel = bce_with_logits_loss_fn(input=pixel_probs, target=pixel_target / 255.0)
+                pred_loss_pixel = bce_with_logits_loss_fn(
+                    input=pixel_probs, target=pixel_target / 255.0
+                )
 
-                # b. reward predictor 
+                # b. reward predictor
                 beta_range = torch.arange(
-                    start=config.train.b_start, end=config.train.b_end, device=reward_t.device
+                    start=config.train.b_start,
+                    end=config.train.b_end,
+                    device=reward_t.device,
                 )
                 B = symexp(beta_range)
                 reward_target = twohot_encode(reward_t, B)
@@ -167,27 +177,35 @@ def train_world_model():
                 # c. continue predictor
                 # The target is 1 if we continue, 0 if we terminate.
                 continue_target = (1.0 - terminated_t).unsqueeze(-1)
-                pred_loss_continue = bce_with_logits_loss_fn(continue_logits, continue_target)
+                pred_loss_continue = bce_with_logits_loss_fn(
+                    continue_logits, continue_target
+                )
 
                 # Prediction loss is the sum of the individual losses
-                l_pred = pred_loss_pixel + pred_loss_vector + reward_loss + pred_loss_continue
+                l_pred = (
+                    pred_loss_pixel
+                    + pred_loss_vector
+                    + reward_loss
+                    + pred_loss_continue
+                )
 
                 # 2. Dynamics loss: max(1,KL) ; KL = KL[sg(q(z|h,x)) || p(z,h)]
                 # 3. Representation Loss: max(1,KL) ; KL = KL[q(z|h,x) || sg(p(z|h))]
                 # Log-likelihoods. Torch accepts logits
 
-                term_1 = posterior_dist.probs  # q(z|h,x)
-                term_2 = prior_dist.probs  # p(z|h)
-                
                 # The "free bits" technique provides a minimum budget for the KL divergence.
                 free_bits = 1.0
                 l_dyn_raw = torch.distributions.kl_divergence(
-                    torch.distributions.Categorical(logits=posterior_dist.logits.detach()), prior_dist
+                    torch.distributions.Categorical(
+                        logits=posterior_dist.logits.detach()
+                    ),
+                    prior_dist,
                 ).mean()
                 l_dyn = torch.max(torch.tensor(free_bits, device=device), l_dyn_raw)
 
                 l_rep_raw = torch.distributions.kl_divergence(
-                    posterior_dist, torch.distributions.Categorical(logits=prior_dist.logits.detach())
+                    posterior_dist,
+                    torch.distributions.Categorical(logits=prior_dist.logits.detach()),
                 ).mean()
                 l_rep = torch.max(torch.tensor(free_bits, device=device), l_rep_raw)
 
@@ -208,24 +226,26 @@ def train_world_model():
             total_loss.backward()
             optimizer.step()
 
-            if batch_idx % 10 == 0: # Print every 10 batches
+            if batch_idx % 10 == 0:  # Print every 10 batches
                 seq_len = pixels.shape[1]
                 avg_loss = total_loss.item() / seq_len
-                print(f"Epoch {epoch+1}, Batch {batch_idx}/{len(dataloader)}, Loss: {avg_loss:.4f}")
+                print(
+                    f"Epoch {epoch + 1}, Batch {batch_idx}/{len(dataloader)}, Loss: {avg_loss:.4f}"
+                )
                 # make prints more useful; that is, show the loss for each term
                 print(
-                    f"  Pred_Pixel: {total_pred_loss_pixel/seq_len:.4f}",
-                    f"  Pred_Vector: {total_pred_loss_vector/seq_len:.4f}",
-                    f"  Reward: {total_reward_loss/seq_len:.4f}",
-                    f"  Continue: {total_pred_loss_continue/seq_len:.4f}",
-                    f"  Dyn: {total_l_dyn/seq_len:.4f}",
-                    f"  Rep: {total_l_rep/seq_len:.4f}",
+                    f"  Pred_Pixel: {total_pred_loss_pixel / seq_len:.4f}",
+                    f"  Pred_Vector: {total_pred_loss_vector / seq_len:.4f}",
+                    f"  Reward: {total_reward_loss / seq_len:.4f}",
+                    f"  Continue: {total_pred_loss_continue / seq_len:.4f}",
+                    f"  Dyn: {total_l_dyn / seq_len:.4f}",
+                    f"  Rep: {total_l_rep / seq_len:.4f}",
                 )
 
         # Save the world model at the end of each epoch
-        print(f"--- End of Epoch {epoch+1}, saving model... ---")
+        print(f"--- End of Epoch {epoch + 1}, saving model... ---")
         torch.save(world_model.state_dict(), config.general.world_model_path)
-        
+
 
 if __name__ == "__main__":
     train_world_model()
