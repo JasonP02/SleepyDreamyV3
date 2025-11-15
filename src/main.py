@@ -3,28 +3,29 @@ import torch
 import os
 import torch.nn.functional as F
 
-from .environment import create_env_with_vision, collect_bootstrapping_examples
+from .environment import create_env_with_vision
 from .world_model import RSSMWorldModel
-from .world_model_trainer import train_world_model
+from .encoder import ObservationEncoder
 from .config import config
 from .encoder import ThreeLayerMLP
 
 
-def main():
-    device = torch.device(config.general.device)
-    print(f"Using device: {device}")
+def check_if_models_exist(encoder_path, rssm_path):
+    if not os.path.exists(encoder_path) or not os.path.exists(rssm_path):
+        print("Trained model files not found. Please run the training script first.")
+        print(f"Expected encoder at: {encoder_path}")
+        print(f"Expected RSSM at: {rssm_path}")
+        return False
+    return True
 
-    env = create_env_with_vision()
-    checkpoint_path = config.general.world_model_path
-    if not os.path.exists(config.general.env_bootstrapping_samples):
-        print("Bootstrap samples not found. Collecting now...")
-        collect_bootstrapping_examples()
+def load_models(encoder_path, rssm_path, device):
+    encoder = ObservationEncoder(
+        mlp_config=config.models.encoder.mlp,
+        cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
+    ).to(device)
+    encoder.load_state_dict(torch.load(encoder_path, map_location=device))
 
-    if config.general.train_world_model or not os.path.exists(checkpoint_path):
-        print("Training world model...")
-        train_world_model()
-
-    print("Loading trained world model...")
     world_model = RSSMWorldModel(
         models_config=config.models,
         env_config=config.environment,
@@ -32,21 +33,43 @@ def main():
         b_start=config.train.b_start,
         b_end=config.train.b_end,
     )
-    world_model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    actor = ThreeLayerMLP(
-        d_in=config.environment.n_observations,
-        d_hidden=config.models.d_hidden,
-        d_out=config.environment.n_actions,
-    )
-    critic = ThreeLayerMLP(
-        d_in=config.environment.n_observations,
-        d_hidden=config.models.d_hidden,
-        d_out=1,
-    )
-    print("World model loaded successfully.")
+    world_model.load_state_dict(torch.load(rssm_path, map_location=device))
     world_model.to(device)
-    actor.to(device)
-    critic.to(device)
+
+    actor_critic_d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+
+    actor = ThreeLayerMLP(
+        d_in=actor_critic_d_in,
+        d_hidden=config.models.actor.d_hidden,
+        d_out=config.environment.n_actions,
+    ).to(device)
+
+    critic = ThreeLayerMLP(
+        d_in=actor_critic_d_in,
+        d_hidden=config.models.critic.d_hidden,
+        d_out=1,
+    ).to(device)
+
+    return encoder, world_model, actor, critic
+
+def main():
+    device = torch.device(config.general.device)
+    print(f"Using device: {device}")
+
+    env = create_env_with_vision()
+    encoder_path = config.general.encoder_path
+    rssm_path = config.general.rssm_path
+
+    if not check_if_models_exist(encoder_path, rssm_path):
+        return
+
+    print("Loading trained encoder and world model...")
+    encoder, world_model, actor, critic = load_models(encoder_path, rssm_path, device)
+
+    print("Models loaded successfully.")
 
     for episode in range(config.train.num_episodes):
         obs, info = env.reset()
@@ -54,18 +77,19 @@ def main():
         step_count = 0
         total_reward = 0
 
+        for dream_step in range(config.train.num_dream_steps):
+            action = actor(obs)
+            
+
+
         # Reset world model hidden state at the start of each episode
         world_model.h_prev = torch.zeros_like(world_model.h_prev).to(device)
 
         while True:
             action = env.action_space.sample()
-            action_onehot = (
-                F.one_hot(
-                    torch.tensor([action]), num_classes=config.environment.n_actions
-                )
-                .float()
-                .to(device)
-            )
+            action_onehot = F.one_hot(
+                torch.tensor([action]), num_classes=config.environment.n_actions
+            ).float().to(device)
             obs, reward, terminated, truncated, info = env.step(action)
 
             # Convert numpy arrays to torch tensors and fix format
@@ -77,12 +101,13 @@ def main():
             obs_tensor = {
                 "pixels": pixels,
                 "state": torch.from_numpy(obs["state"])
-                .float()
-                .to(device)
+                .float().to(device)
                 .unsqueeze(0),  # Add batch dim,
             }
 
-            world_model(obs_tensor, action_onehot)
+            posterior_logits = encoder(obs_tensor)
+            posterior_dist = torch.distributions.Categorical(logits=posterior_logits)
+            world_model(posterior_dist, action_onehot)
 
             step_count += 1
             episode_reward += float(reward)

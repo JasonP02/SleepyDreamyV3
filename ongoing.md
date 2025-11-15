@@ -4,6 +4,13 @@ This marks what I have done, and what is to be done
 
 ## Next
 Implementing the actor critic network
+I have the networks, I just need the training loop
+
+Actions in the environment are taken from the actor network
+The actor maximizes the return
+The critic approximates the *distribution of returns* for each state
+
+World model and actor generate states, actions, rewards, continue flags
 
 
 

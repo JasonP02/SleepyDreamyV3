@@ -4,10 +4,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.distributions as dist
 from torch.utils.data import DataLoader, Dataset
 
 from .config import config
 from .trainer_utils import symlog, symexp, twohot_encode
+from .encoder import ObservationEncoder
 from .world_model import RSSMWorldModel
 
 
@@ -76,17 +78,23 @@ def train_world_model():
     device = torch.device(config.general.device)
     print(f"Using device: {device}")
 
-    world_model = RSSMWorldModel(
+    encoder = ObservationEncoder(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
+    ).to(device)
+
+    world_model = RSSMWorldModel(
+        models_config=config.models,
         env_config=config.environment,
-        gru_config=config.models.rnn,
         batch_size=config.train.batch_size,
         b_start=config.train.b_start,
         b_end=config.train.b_end,
-    )
-    world_model.to(device)
-    optimizer = optim.Adam(world_model.parameters(), lr=1e-4, weight_decay=1e-6)
+    ).to(device)
+
+    # Combine parameters for the optimizer
+    all_params = list(encoder.parameters()) + list(world_model.parameters())
+    optimizer = optim.Adam(all_params, lr=1e-4, weight_decay=1e-6)
     bsz = config.train.batch_size
 
     dataset_path = config.general.env_bootstrapping_samples
@@ -129,10 +137,13 @@ def train_world_model():
                 action_t = actions[:, t]
                 reward_t = rewards[:, t]
                 terminated_t = terminated[:, t]
+
+                posterior_logits = encoder(obs_t)
+                posterior_dist = dist.Categorical(logits=posterior_logits)
                 (
                     obs_reconstruction,
-                    posterior_dist,
-                    prior_dist,
+                    _, # posterior_logits are already available
+                    prior_logits,
                     reward_dist,
                     continue_logits,
                 ) = world_model(obs_t, action_t)
@@ -194,18 +205,19 @@ def train_world_model():
                 # Log-likelihoods. Torch accepts logits
 
                 # The "free bits" technique provides a minimum budget for the KL divergence.
+                prior_dist = dist.Categorical(logits=prior_logits)
                 free_bits = 1.0
-                l_dyn_raw = torch.distributions.kl_divergence(
-                    torch.distributions.Categorical(
+                l_dyn_raw = dist.kl_divergence(
+                    dist.Categorical(
                         logits=posterior_dist.logits.detach()
                     ),
                     prior_dist,
                 ).mean()
                 l_dyn = torch.max(torch.tensor(free_bits, device=device), l_dyn_raw)
 
-                l_rep_raw = torch.distributions.kl_divergence(
+                l_rep_raw = dist.kl_divergence(
                     posterior_dist,
-                    torch.distributions.Categorical(logits=prior_dist.logits.detach()),
+                    dist.Categorical(logits=prior_dist.logits.detach()),
                 ).mean()
                 l_rep = torch.max(torch.tensor(free_bits, device=device), l_rep_raw)
 
@@ -244,7 +256,9 @@ def train_world_model():
 
         # Save the world model at the end of each epoch
         print(f"--- End of Epoch {epoch + 1}, saving model... ---")
-        torch.save(world_model.state_dict(), config.general.world_model_path)
+        # Save both encoder and world model
+        torch.save(encoder.state_dict(), config.general.encoder_path)
+        torch.save(world_model.state_dict(), config.general.rssm_path)
 
 
 if __name__ == "__main__":

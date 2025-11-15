@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributions as dist
 from .encoder import ObservationEncoder
 from .decoder import ObservationDecoder
 
@@ -25,12 +24,6 @@ class RSSMWorldModel(nn.Module):
     ):
         super().__init__()
         self.d_hidden = models_config.d_hidden
-        # Encoder
-        self.encoder = ObservationEncoder(
-            mlp_config=models_config.encoder.mlp,
-            cnn_config=models_config.encoder.cnn,
-            d_hidden=models_config.d_hidden,
-        )
 
         # GatedRecurrentUnit | Uses 8 blocks to make a pseudo-large network
         self.blocks = nn.ModuleList()
@@ -81,18 +74,13 @@ class RSSMWorldModel(nn.Module):
             d_hidden=models_config.d_hidden,
         )
 
-    def forward(self, x, a):
+    def forward(self, posterior_dist, a):
         """
-        1. Get distribution of representations (z) from image/obs
-        2. Use 'straight-through gradients' to sample from z
-        3. Pass sampled representation, z, into the GRU and get the hidden state: h
-        4. Pass state, h, into dynamics predictor to get the learned representation: z^
+        1. Use 'straight-through gradients' to sample from z distribution
+        2. Pass sampled representation, z, into the GRU and get the hidden state: h
+        3. Pass state, h, into dynamics predictor to get the learned representation: z^
         """
-        # 1. Get distribution z
-        posterior_logits = self.encoder(x)  # (batch_size, latents, bins_per_latent)
-        posterior_dist = dist.Categorical(logits=posterior_logits)
-
-        # 2. Apply straight-through method (sample while keeping gradients)
+        # 1. Apply straight-through method (sample while keeping gradients)
         z_indices = posterior_dist.sample()  # (batch_size, latents)
         z_onehot = F.one_hot(z_indices, num_classes=self.d_hidden // 16).float()
 
@@ -101,7 +89,7 @@ class RSSMWorldModel(nn.Module):
         z_flat = z_sample.view(bsz, -1)
         z_embed = self.z_embedding(z_flat)
 
-        # 3. Pass representation into GRU
+        # 2. Pass representation into GRU
         outputs = []
         for i, block in enumerate(self.blocks):
             self.h_prev_blocks = torch.split(self.h_prev, self.d_hidden, dim=-1)
@@ -109,10 +97,9 @@ class RSSMWorldModel(nn.Module):
             outputs.append(h_i)
 
         h = torch.cat(outputs, dim=-1)
-
-        # 4. Get leraned representation \hat{z}
+        
+        # 3. Get learned representation \hat{z}
         prior_logits = self.dynamics_predictor(h)
-        prior_dist = dist.Categorical(logits=prior_logits)
 
         self.h_prev = h
         self.z_prev = (
@@ -132,8 +119,8 @@ class RSSMWorldModel(nn.Module):
 
         return (
             obs_reconstruction,
-            posterior_dist,
-            prior_dist,
+            posterior_dist.logits,
+            prior_logits,
             reward_dist,
             continue_logits,
         )

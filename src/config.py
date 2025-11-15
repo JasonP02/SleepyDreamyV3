@@ -16,7 +16,8 @@ def get_default_device():
 
 class GeneralConfig(BaseModel):
     device: str = get_default_device()
-    world_model_path: str = "world_model.pt"
+    encoder_path: str = "encoder.pt"
+    rssm_path: str = "rssm.pt"
     train_world_model: bool = True
     env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
 
