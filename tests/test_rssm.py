@@ -6,10 +6,8 @@ from src.world_model import RSSMWorldModel
 
 def test_rssm():
     rssm = RSSMWorldModel(
-        mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn,
+        models_config=config.models,
         env_config=config.environment,
-        gru_config=config.models.rnn,
         batch_size=config.train.batch_size,
         b_start=-20,
         b_end=21,

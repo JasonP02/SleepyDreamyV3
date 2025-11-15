@@ -41,7 +41,6 @@ class CNNEncoderConfig(BaseModel):
 class MLPEncoderConfig(BaseModel):
     hidden_dim_ratio: int = 16
     n_layers: int = 3
-    d_hidden: int = 256
     latent_categories: int = 16  # Number of categories per latent variable
 
 
@@ -55,6 +54,7 @@ class EncoderConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
+    d_hidden: int = 256
     encoder: EncoderConfig = EncoderConfig()
     rnn: GRUConfig = GRUConfig()
 

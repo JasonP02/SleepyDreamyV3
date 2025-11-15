@@ -7,7 +7,7 @@ def test_gru():
     """
     Tests shape outputs of the gated recurrent unit
     """
-    d_hidden = config.models.encoder.mlp.d_hidden
+    d_hidden = config.models.d_hidden
     n_actions = config.environment.n_actions
     d_in = d_hidden + n_actions
     bsz = 1000

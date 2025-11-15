@@ -26,10 +26,8 @@ def main():
 
     print("Loading trained world model...")
     world_model = RSSMWorldModel(
-        mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn,
+        models_config=config.models,
         env_config=config.environment,
-        gru_config=config.models.rnn,
         batch_size=1,  # For inference, batch size is 1
         b_start=config.train.b_start,
         b_end=config.train.b_end,
@@ -37,12 +35,12 @@ def main():
     world_model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     actor = ThreeLayerMLP(
         d_in=config.environment.n_observations,
-        d_hidden=config.models.encoder.mlp.d_hidden,
+        d_hidden=config.models.d_hidden,
         d_out=config.environment.n_actions,
     )
     critic = ThreeLayerMLP(
         d_in=config.environment.n_observations,
-        d_hidden=config.models.encoder.mlp.d_hidden,
+        d_hidden=config.models.d_hidden,
         d_out=1,
     )
     print("World model loaded successfully.")

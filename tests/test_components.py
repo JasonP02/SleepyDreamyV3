@@ -17,7 +17,8 @@ def test_encoder_forward_pass_and_shape():
     # Initialize the encoder
     encoder = ObservationEncoder(
         mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn
+        cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden
     )
 
     # Perform a forward pass
@@ -27,7 +28,7 @@ def test_encoder_forward_pass_and_shape():
         assert False, f"Encoder forward pass failed with an exception: {e}"
 
     # Check the output shape
-    expected_shape = (batch_size, config.models.encoder.mlp.d_hidden, config.models.encoder.mlp.d_hidden // config.models.encoder.mlp.latent_categories)
+    expected_shape = (batch_size, config.models.d_hidden, config.models.d_hidden // config.models.encoder.mlp.latent_categories)
     assert logits.shape == expected_shape, f"Expected output shape {expected_shape}, but got {logits.shape}"
 
     print("Encoder forward pass and shape test passed!")

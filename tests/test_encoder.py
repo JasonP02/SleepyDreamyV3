@@ -1,6 +1,6 @@
 import torch
 from src.encoder import (
-    ObservationMLPEncoder,
+    ThreeLayerMLP,
     ObservationCNNEncoder,
     ObservationEncoder,
 )
@@ -13,10 +13,12 @@ def test_encoder_mlp():
     We encode the observation vectors with a 3-layer MLP
     """
     d_in = 8
+    d_hidden = 128
     d_out = 128
-    model = ObservationMLPEncoder(
+    model = ThreeLayerMLP(
         d_in=d_in,
-        d_hidden=d_out,
+        d_hidden=d_hidden,
+        d_out=d_out,
     )
     bsz = 128
     x_shape = (bsz, d_in)  # batch, vector
@@ -56,6 +58,7 @@ def test_observation_encoder():
     encoder = ObservationEncoder(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
     )
 
     image = torch.randn((128, 3, 100, 100))

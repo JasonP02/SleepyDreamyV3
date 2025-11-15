@@ -8,11 +8,11 @@ class ObservationEncoder(nn.Module):
         self,
         mlp_config,
         cnn_config,
+        d_hidden,
     ):
         super().__init__()
         self.MLP = ThreeLayerMLP(
-            d_in=8,
-            d_hidden=mlp_config.d_hidden,
+            d_in=8, d_hidden=d_hidden, d_out=d_hidden
         )
         self.CNN = ObservationCNNEncoder(
             target_size=cnn_config.target_size,
@@ -20,19 +20,19 @@ class ObservationEncoder(nn.Module):
             kernel_size=cnn_config.kernel_size,
             stride=cnn_config.stride,
             padding=cnn_config.padding,
-            d_hidden=mlp_config.d_hidden,
+            d_hidden=d_hidden,
             hidden_dim_ratio=mlp_config.hidden_dim_ratio,
             num_layers=cnn_config.num_layers,
             final_feature_size=cnn_config.final_feature_size,
         )
 
-        self.latents = mlp_config.d_hidden
+        self.latents = d_hidden
         # Use dynamic calculation based on actual config parameters
-        n_channels = int(mlp_config.d_hidden / mlp_config.hidden_dim_ratio)
+        n_channels = int(d_hidden / mlp_config.hidden_dim_ratio)
         cnn_out_features = (
             n_channels * 2 ** (cnn_config.num_layers - 1)
         ) * cnn_config.final_feature_size**2
-        encoder_out = cnn_out_features + mlp_config.d_hidden  # CNN + MLP
+        encoder_out = cnn_out_features + d_hidden  # CNN + MLP
         self.latent_categories = mlp_config.latent_categories
 
         # Paper

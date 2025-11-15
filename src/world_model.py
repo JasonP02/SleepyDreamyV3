@@ -17,22 +17,24 @@ class RSSMWorldModel(nn.Module):
 
     def __init__(
         self,
-        mlp_config,
-        cnn_config,
+        models_config,
         env_config,
-        gru_config,
         batch_size,
         b_start,
         b_end,
     ):
         super().__init__()
-        self.d_hidden = mlp_config.d_hidden
+        self.d_hidden = models_config.d_hidden
         # Encoder
-        self.encoder = ObservationEncoder(mlp_config=mlp_config, cnn_config=cnn_config)
+        self.encoder = ObservationEncoder(
+            mlp_config=models_config.encoder.mlp,
+            cnn_config=models_config.encoder.cnn,
+            d_hidden=models_config.d_hidden,
+        )
 
         # GatedRecurrentUnit | Uses 8 blocks to make a pseudo-large network
         self.blocks = nn.ModuleList()
-        self.n_blocks = gru_config.n_blocks
+        self.n_blocks = models_config.rnn.n_blocks
         gru_d_in = self.d_hidden + env_config.n_actions
         for _ in range(self.n_blocks):
             self.blocks.append(
@@ -40,12 +42,12 @@ class RSSMWorldModel(nn.Module):
             )
 
         # Outputs prior distribution \hat{z} from the sequence model
-        n_gru_blocks = gru_config.n_blocks
+        n_gru_blocks = models_config.rnn.n_blocks
         self.dynamics_predictor = DynamicsPredictor(
             d_in=self.d_hidden * n_gru_blocks, d_hidden=self.d_hidden
         )
 
-        self.n_latents = mlp_config.d_hidden
+        self.n_latents = models_config.d_hidden
         # Initalizing network params for t=0 ; h_0 is the zero matrix
         h_prev = torch.zeros(batch_size, self.d_hidden * n_gru_blocks)
         self.register_buffer("h_prev", h_prev)
@@ -60,7 +62,8 @@ class RSSMWorldModel(nn.Module):
 
         # Takes 2D categorical samples and projects to d_hidden for GRU input
         h_z_dim = (self.d_hidden * n_gru_blocks) + (
-            self.d_hidden * (self.d_hidden // mlp_config.latent_categories)
+            self.d_hidden
+            * (self.d_hidden // models_config.encoder.mlp.latent_categories)
         )
 
         # Rewards use two-hot encoding
@@ -71,10 +74,11 @@ class RSSMWorldModel(nn.Module):
 
         # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
         self.decoder = ObservationDecoder(
-            mlp_config=mlp_config,
-            cnn_config=cnn_config,
+            mlp_config=models_config.encoder.mlp,
+            cnn_config=models_config.encoder.cnn,
             env_config=env_config,
-            gru_config=gru_config,
+            gru_config=models_config.rnn,
+            d_hidden=models_config.d_hidden,
         )
 
     def forward(self, x, a):
