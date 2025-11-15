@@ -1,4 +1,7 @@
 import torch
+from .encoder import ObservationEncoder, ThreeLayerMLP
+from .world_model import RSSMWorldModel
+from .config import config
 
 
 def symlog(x):
@@ -20,7 +23,7 @@ def symexp(x):
 def twohot_encode(x, B):
     # B is a 1D tensor of bin edges.
     # x is a 1D tensor of values to encode.
-    
+
     # Clamp values to be within the range of B
     x = torch.clamp(x, B.min(), B.max())
 
@@ -30,9 +33,9 @@ def twohot_encode(x, B):
 
     # The left bin is the one before it. Clamp at 0 for safety.
     left_bin_indices = torch.clamp(right_bin_indices - 1, 0)
-    
+
     # Handle cases where right_bin_indices might be out of bounds if x matches B.max()
-    right_bin_indices = torch.clamp(right_bin_indices, 0, len(B)-1)
+    right_bin_indices = torch.clamp(right_bin_indices, 0, len(B) - 1)
 
     # Get the values of the left and right bin edges
     bin_left = B[left_bin_indices]
@@ -42,7 +45,7 @@ def twohot_encode(x, B):
     # Avoid division by zero if a value falls exactly on a bin edge
     denom = bin_right - bin_left
     denom[denom == 0] = 1.0
-    
+
     weight_right = (x - bin_left) / denom
     weight_left = 1.0 - weight_right
 
@@ -55,5 +58,39 @@ def twohot_encode(x, B):
     weights.scatter_(1, left_bin_indices.unsqueeze(1), weight_left.unsqueeze(1))
     # Use scatter_add_ for the right bin in case left and right indices are the same
     weights.scatter_add_(1, right_bin_indices.unsqueeze(1), weight_right.unsqueeze(1))
-    
+
     return weights
+
+
+def initalize_models(device):
+    encoder = ObservationEncoder(
+        mlp_config=config.models.encoder.mlp,
+        cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
+    ).to(device)
+
+    world_model = RSSMWorldModel(
+        models_config=config.models,
+        env_config=config.environment,
+        batch_size=1,  # For inference, batch size is 1
+        b_start=config.train.b_start,
+        b_end=config.train.b_end,
+    ).to(device)
+
+    actor_critic_d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+
+    actor = ThreeLayerMLP(
+        d_in=actor_critic_d_in,
+        d_hidden=config.models.d_hidden,
+        d_out=config.environment.n_actions,
+    ).to(device)
+
+    critic = ThreeLayerMLP(
+        d_in=actor_critic_d_in,
+        d_hidden=config.models.d_hidden,
+        d_out=1,
+    ).to(device)
+    return encoder, world_model, actor, critic

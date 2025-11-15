@@ -18,8 +18,6 @@ class GeneralConfig(BaseModel):
     device: str = get_default_device()
     encoder_path: str = "encoder.pt"
     rssm_path: str = "rssm.pt"
-    train_world_model: bool = True
-    env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
 
 
 class EnvironmentConfig(BaseModel):
@@ -61,10 +59,7 @@ class ModelsConfig(BaseModel):
 
 
 class TrainConfig(BaseModel):
-    num_bootstrap_episodes: int = 100
-    num_episodes: int = 100
-    num_bootstrap_epochs: int = 3
-    sequence_length: int = 50
+    num_time_steps: int = 100
     batch_size: int = 1
     beta_dyn: float = 0.99
     beta_rep: float = 0.99

@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .encoder import ObservationEncoder
 from .decoder import ObservationDecoder
 
 
@@ -97,7 +96,7 @@ class RSSMWorldModel(nn.Module):
             outputs.append(h_i)
 
         h = torch.cat(outputs, dim=-1)
-        
+
         # 3. Get learned representation \hat{z}
         prior_logits = self.dynamics_predictor(h)
 
