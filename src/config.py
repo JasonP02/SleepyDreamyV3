@@ -62,6 +62,8 @@ class ModelsConfig(BaseModel):
 class TrainConfig(BaseModel):
     num_bootstrap_episodes: int = 100
     num_episodes: int = 100
+    num_bootstrap_epochs: int = 3
+    sequence_length: int = 50
     batch_size: int = 1
     beta_dyn: float = 0.99
     beta_rep: float = 0.99

@@ -12,7 +12,7 @@ from .world_model import RSSMWorldModel
 
 
 class TrajectoryDataset(Dataset):
-    def __init__(self, h5_path, sequence_length: int = 50):
+    def __init__(self, h5_path, sequence_length: int):
         self.h5_path = h5_path
         self.sequence_length = sequence_length
 
@@ -88,11 +88,11 @@ def train_world_model():
     bsz = config.train.batch_size
 
     dataset_path = config.general.env_bootstrapping_samples
-    dataset = TrajectoryDataset(dataset_path, sequence_length=50)
+    dataset = TrajectoryDataset(dataset_path, sequence_length=config.train.sequence_length)
 
     dataloader = DataLoader(dataset, batch_size=bsz, shuffle=True)
     
-    num_epochs = 10  # Or get this from config
+    num_epochs = config.train.num_bootstrap_epochs
     for epoch in range(num_epochs):
         print(f"--- Epoch {epoch+1}/{num_epochs} ---")
         for batch_idx, batch in enumerate(dataloader):
@@ -108,6 +108,13 @@ def train_world_model():
             world_model.z_prev = torch.zeros_like(world_model.z_prev).to(device)
 
             total_loss = 0
+            # Accumulators for individual loss components for logging
+            total_pred_loss_pixel = 0
+            total_pred_loss_vector = 0
+            total_reward_loss = 0
+            total_pred_loss_continue = 0
+            total_l_dyn = 0
+            total_l_rep = 0
 
             states = symlog(states)  # symlog vector inputs before model input
 
@@ -160,7 +167,7 @@ def train_world_model():
                 # c. continue predictor
                 # The target is 1 if we continue, 0 if we terminate.
                 continue_target = (1.0 - terminated_t).unsqueeze(-1)
-                pred_loss_continue = bce_with_logits_loss_fn(continue_logits.squeeze(-1), continue_target.squeeze(-1))
+                pred_loss_continue = bce_with_logits_loss_fn(continue_logits, continue_target)
 
                 # Prediction loss is the sum of the individual losses
                 l_pred = pred_loss_pixel + pred_loss_vector + reward_loss + pred_loss_continue
@@ -188,22 +195,31 @@ def train_world_model():
 
                 total_loss += loss
 
+                # Accumulate individual losses
+                total_pred_loss_pixel += pred_loss_pixel.item()
+                total_pred_loss_vector += pred_loss_vector.item()
+                total_reward_loss += reward_loss.item()
+                total_pred_loss_continue += pred_loss_continue.item()
+                total_l_dyn += l_dyn.item()
+                total_l_rep += l_rep.item()
+
             # Perform backpropagation on the accumulated loss for the entire sequence
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
 
             if batch_idx % 10 == 0: # Print every 10 batches
-                avg_loss = total_loss.item() / pixels.shape[1]
+                seq_len = pixels.shape[1]
+                avg_loss = total_loss.item() / seq_len
                 print(f"Epoch {epoch+1}, Batch {batch_idx}/{len(dataloader)}, Loss: {avg_loss:.4f}")
                 # make prints more useful; that is, show the loss for each term
                 print(
-                    f"  Prediction Loss (pixels): {pred_loss_pixel.item():.4f}",
-                    f"  Prediction Loss (vector): {pred_loss_vector.item():.4f}",
-                    f"  Reward Loss: {reward_loss.item():.4f}",
-                    f"  Continue Loss: {pred_loss_continue.item():.4f}",
-                    f"  Dynamics Loss: {l_dyn.item():.4f}",
-                    f"  Representation Loss: {l_rep.item():.4f}",
+                    f"  Pred_Pixel: {total_pred_loss_pixel/seq_len:.4f}",
+                    f"  Pred_Vector: {total_pred_loss_vector/seq_len:.4f}",
+                    f"  Reward: {total_reward_loss/seq_len:.4f}",
+                    f"  Continue: {total_pred_loss_continue/seq_len:.4f}",
+                    f"  Dyn: {total_l_dyn/seq_len:.4f}",
+                    f"  Rep: {total_l_rep/seq_len:.4f}",
                 )
 
         # Save the world model at the end of each epoch

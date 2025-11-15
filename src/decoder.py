@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .encoder import ThreeLayerMLP
 
 class ObservationDecoder(nn.Module):
     """
@@ -25,7 +26,7 @@ class ObservationDecoder(nn.Module):
             d_hidden * (d_hidden // mlp_config.latent_categories)
         )
 
-        self.MLP = ObservationMLPDecoder(
+        self.MLP = ThreeLayerMLP(
             d_in=decoder_input_dim,
             d_hidden=mlp_config.d_hidden,
             d_out=env_config.n_observations,

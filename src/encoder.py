@@ -2,7 +2,6 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-
 class ObservationEncoder(nn.Module):
     def __init__(
         self,
@@ -10,7 +9,7 @@ class ObservationEncoder(nn.Module):
         cnn_config,
     ):
         super().__init__()
-        self.MLP = ObservationMLPEncoder(
+        self.MLP = ThreeLayerMLP(
             d_in=8,
             d_hidden=mlp_config.d_hidden,
         )
@@ -134,7 +133,7 @@ class ObservationCNNEncoder(nn.Module):
         return x
 
 
-class ObservationMLPEncoder(nn.Module):
+class ThreeLayerMLP(nn.Module):
     """
     Observations are encoded with 3-layer MLP
     Input state is a vector of size 8

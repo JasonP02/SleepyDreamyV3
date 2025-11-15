@@ -1,3 +1,4 @@
+from threading import Thread
 import torch
 import os
 import torch.nn.functional as F
@@ -6,6 +7,7 @@ from .environment import create_env_with_vision, collect_bootstrapping_examples
 from .world_model import RSSMWorldModel
 from .world_model_trainer import train_world_model
 from .config import config
+from .encoder import ThreeLayerMLP
 
 
 def main():
@@ -34,6 +36,16 @@ def main():
     )
     world_model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     world_model.to(device)
+    actor = ThreeLayerMLP(
+        d_in=config.environment.n_observations,
+        d_hidden=config.models.actor.d_hidden,
+        d_out=config.environment.n_actions,
+    )
+    critic = ThreeLayerMLP(
+        d_in=config.environment.n_observations,
+        d_hidden=config.models.critic.d_hidden,
+        d_out=1,
+    )
     print("World model loaded successfully.")
 
     for episode in range(config.train.num_episodes):
