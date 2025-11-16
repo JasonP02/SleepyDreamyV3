@@ -62,7 +62,7 @@ def twohot_encode(x, B):
     return weights
 
 
-def initalize_models(device):
+def initalize_world_model(device):
     encoder = ObservationEncoder(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
@@ -77,20 +77,26 @@ def initalize_models(device):
         b_end=config.train.b_end,
     ).to(device)
 
-    actor_critic_d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+    return encoder, world_model
+
+def initalize_actor(device):
+    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
         config.models.d_hidden
         * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
     )
-
-    actor = ThreeLayerMLP(
-        d_in=actor_critic_d_in,
+    return ThreeLayerMLP(
+        d_in=d_in,
         d_hidden=config.models.d_hidden,
         d_out=config.environment.n_actions,
     ).to(device)
 
-    critic = ThreeLayerMLP(
-        d_in=actor_critic_d_in,
+def initalize_critic(device):
+    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+    return ThreeLayerMLP(
+        d_in=d_in,
         d_hidden=config.models.d_hidden,
-        d_out=1,
+        d_out=config.train.b_end - config.train.b_start
     ).to(device)
-    return encoder, world_model, actor, critic

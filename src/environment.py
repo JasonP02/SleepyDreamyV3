@@ -4,9 +4,10 @@ from gymnasium.wrappers import AddRenderObservation
 import h5py
 import torch
 import torch.nn.functional as F
+from queue import Empty
 
 from .config import config
-
+from .trainer_utils import initialize_actor, initalize_world_model
 
 def create_env_with_vision():
     base_env = gym.make(config.environment.environment_name, render_mode="rgb_array")
@@ -14,66 +15,99 @@ def create_env_with_vision():
     env = AddRenderObservation(
         base_env, render_only=False, render_key="pixels", obs_key="state"
     )
-
     return env
 
-
-def collect_experiences():
+def collect_experiences(data_queue, model_queue):
+    """
+    Continuously collects experiences from the environment and puts them on a queue.
+    This function acts as the "Producer".
+    """
     env = create_env_with_vision()
+    device = "cpu" # Collector runs on CPU
+    actor = initialize_actor(device=device)
+    encoder, world_model = initalize_world_model(device=device)
 
-    with h5py.File(config.general.env_bootstrapping_samples, "w") as f:
-        grp = f.create_group("episodes")
-        f.attrs["n_episodes"] = config.train.num_bootstrap_episodes
+    # Move models to eval mode
+    actor.eval()
+    encoder.eval()
+    world_model.eval()
 
-        for episode_idx in range(config.train.num_bootstrap_episodes):
-            print(
-                f"Collecting episode {episode_idx + 1}/{config.train.num_bootstrap_episodes}"
-            )
-            obs, info = env.reset()
-            episode_pixels, episode_vec_obs, episode_actions, episode_rewards = (
-                [],
-                [],
-                [],
-                [],
-            )
+    episode_count = 0
 
-            while True:
-                action = env.action_space.sample()
-                obs, reward, terminated, truncated, info = env.step(action)
+    while True:  # Run indefinitely
+        try:
+            # Check for updated models from the trainer
+            new_model_states = model_queue.get_nowait()
+            actor.load_state_dict(new_model_states['actor'])
+            encoder.load_state_dict(new_model_states['encoder'])
+            world_model.load_state_dict(new_model_states['world_model'])
+            actor.eval()
+            encoder.eval()
+            world_model.eval()
+            print("Collector: Updated models from trainer.")
+        except Empty:
+            pass
 
-                episode_pixels.append(obs["pixels"])
-                episode_vec_obs.append(obs["state"])
-                episode_actions.append(action)
-                episode_rewards.append(reward)
+        episode_count += 1
+        print(f"Collecting episode {episode_count}...")
+        obs, info = env.reset()
 
-                if terminated or truncated:
-                    break
+        # Reset world model state for new episode
+        h = torch.zeros(1, config.models.d_hidden * config.models.rnn.n_blocks, device=device)
+        z_probs = torch.zeros(1, config.models.d_hidden, config.models.d_hidden // 16, device=device)
+        action = torch.zeros(1, config.environment.n_actions, device=device)
 
-            # Process and write this episode's data directly to the file
-            pixels_np = np.array(episode_pixels)
-            pixels_tensor = torch.from_numpy(pixels_np).permute(0, 3, 1, 2).float()
-            resized = F.interpolate(
-                pixels_tensor,
-                size=config.models.encoder.cnn.target_size,
-                mode="bilinear",
-            )
-            resized_np = resized.permute(0, 2, 3, 1).numpy()
+        episode_pixels, episode_vec_obs, episode_actions, episode_rewards, episode_terminated = (
+            [], [], [], [], []
+        )
 
-            ep_grp = grp.create_group(str(episode_idx))
-            ep_grp.create_dataset("pixels", data=resized_np, dtype="uint8")
-            ep_grp.attrs["n_steps"] = len(resized_np)
-            ep_grp.create_dataset(
-                "vec_obs", data=np.array(episode_vec_obs), dtype="float32"
-            )
-            ep_grp.create_dataset(
-                "action", data=np.array(episode_actions), dtype="int64"
-            )
-            ep_grp.create_dataset(
-                "reward", data=np.array(episode_rewards), dtype="float32"
-            )
+        while True:
+            # 1. Preprocess observation
+            pixel_obs_t = torch.from_numpy(obs['pixels']).to(device).float().permute(2, 0, 1).unsqueeze(0)
+            vec_obs_t = torch.from_numpy(obs['state']).to(device).float().unsqueeze(0)
+            current_obs_dict = {"pixels": pixel_obs_t, "state": vec_obs_t}
 
-    env.close()
+            # 2. Run inference with no gradients
+            with torch.no_grad():
+                # a. Encode observation to get posterior z_t
+                posterior_logits = encoder(current_obs_dict)
+                posterior_dist = torch.distributions.Categorical(logits=posterior_logits)
+                z_sample = posterior_dist.sample()
+                z_onehot = F.one_hot(z_sample, num_classes=config.models.d_hidden // 16).float()
+                z_flat = z_onehot.view(1, -1)
 
+                # b. Update recurrent state h_t
+                z_embed = world_model.z_embedding(z_flat)
+                h, _ = world_model.step_dynamics(z_embed, action, h) # We don't need prior_logits here
 
-if __name__ == "__main__":
-    collect_bootstrapping_examples()
+                # c. Get action from actor
+                actor_input = world_model.join_h_and_z(h, z_onehot)
+                action_dist = torch.distributions.Categorical(logits=actor(actor_input))
+                action = action_dist.sample()
+
+            # Convert action tensor to a numpy int for the environment
+            action_np = action.item()
+            # Convert action to one-hot for the next world model step
+            action = F.one_hot(action, num_classes=config.environment.n_actions).float()
+
+            # Execute action in environment
+            obs, reward, terminated, truncated, info = env.step(action_np)
+
+            episode_pixels.append(obs["pixels"])
+            episode_vec_obs.append(obs["state"])
+            episode_actions.append(action.cpu().numpy()) # Store one-hot action
+            episode_rewards.append(reward)
+            episode_terminated.append(terminated)
+
+            if terminated or truncated:
+                break
+
+        # Process and package the data for the queue
+        pixels_np = np.array(episode_pixels, dtype=np.uint8)
+        vec_obs_np = np.array(episode_vec_obs, dtype=np.float32)
+        actions_np = np.squeeze(np.array(episode_actions, dtype=np.float32))
+        rewards_np = np.array(episode_rewards, dtype=np.float32)
+        terminated_np = np.array(episode_terminated, dtype=bool)
+
+        # Put the complete episode data as a tuple of numpy arrays onto the queue
+        data_queue.put((pixels_np, vec_obs_np, actions_np, rewards_np, terminated_np))

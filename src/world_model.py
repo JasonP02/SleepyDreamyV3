@@ -60,9 +60,10 @@ class RSSMWorldModel(nn.Module):
 
         # Rewards use two-hot encoding
         reward_out = abs(b_start - b_end)
-        self.reward_predictor = nn.Linear(h_z_dim, reward_out)
+        self.reward_predictor = nn.Linear(h_z_dim, reward_out + 1)
         nn.init.zeros_(self.reward_predictor.weight)  # Reward is initalized to zero
         self.continue_predictor = nn.Linear(h_z_dim, 1)
+
 
         # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
         self.decoder = ObservationDecoder(
@@ -73,56 +74,65 @@ class RSSMWorldModel(nn.Module):
             d_hidden=models_config.d_hidden,
         )
 
-    def forward(self, posterior_dist, a):
+    def step_dynamics(self, z_embed, action, h_prev):
         """
-        1. Use 'straight-through gradients' to sample from z distribution
-        2. Pass sampled representation, z, into the GRU and get the hidden state: h
-        3. Pass state, h, into dynamics predictor to get the learned representation: z^
+        Steps the recurrent dynamics forward one step.
+
+        Args:
+            z_embed: The embedded latent state z_t.
+            action: The one-hot encoded action a_t.
+            h_prev: The previous hidden state h_{t-1}.
+
+        Returns:
+            h: The new hidden state h_t.
+            prior_logits: The predicted logits for the next latent state, z_{t+1}.
         """
-        # 1. Apply straight-through method (sample while keeping gradients)
+        outputs = []
+        h_prev_blocks = torch.split(h_prev, self.d_hidden, dim=-1)
+        for i, block in enumerate(self.blocks):
+            h_i = block(z_embed, action, h_prev_blocks[i])
+            outputs.append(h_i)
+        h = torch.cat(outputs, dim=-1)
+        prior_logits = self.dynamics_predictor(h)
+        return h, prior_logits
+
+    def predict_heads(self, h, z_sample):
+        """
+        Generates predictions from the model's state (h, z).
+        """
+        h_z_joined = self.join_h_and_z(h, z_sample) # This is the state for actor/critic
+        obs_reconstruction = self.decoder(h_z_joined)
+        reward_logits = self.reward_predictor(h_z_joined)
+        continue_logits = self.continue_predictor(h_z_joined)
+        return {
+            "obs_reconstruction": obs_reconstruction,
+            "reward_logits": reward_logits,
+            "continue_logits": continue_logits,
+            "h_z_joined": h_z_joined,
+        }
+
+    def forward(self, posterior_dist, action):
+        """
+        Performs a full world model step for training.
+        This involves encoding, stepping dynamics, and making predictions.
+        """
+        # Apply straight-through method to sample z while keeping gradients
         z_indices = posterior_dist.sample()  # (batch_size, latents)
         z_onehot = F.one_hot(z_indices, num_classes=self.d_hidden // 16).float()
-
         z_sample = z_onehot + (posterior_dist.probs - posterior_dist.probs.detach())
         bsz = z_onehot.shape[0]
         z_flat = z_sample.view(bsz, -1)
         z_embed = self.z_embedding(z_flat)
 
-        # 2. Pass representation into GRU
-        outputs = []
-        for i, block in enumerate(self.blocks):
-            self.h_prev_blocks = torch.split(self.h_prev, self.d_hidden, dim=-1)
-            h_i = block(z_embed, a, self.h_prev_blocks[i])
-            outputs.append(h_i)
-
-        h = torch.cat(outputs, dim=-1)
-
-        # 3. Get learned representation \hat{z}
-        prior_logits = self.dynamics_predictor(h)
-
+        # Step the dynamics to get the new hidden state and prior
+        h, prior_logits = self.step_dynamics(z_embed, action, self.h_prev)
         self.h_prev = h
-        self.z_prev = (
-            posterior_dist.probs
-        )  # Store probabilities for next step if needed
 
-        # The reward, continue, decoder all take the same input
-        h_z_joined = self.join_h_and_z(h, z_sample)
+        # Generate predictions using the new state
+        predictions = self.predict_heads(h, z_sample)
+        predictions["prior_logits"] = prior_logits
 
-        # Decode the prediction and hidden state back into the original space
-        obs_reconstruction = self.decoder(h_z_joined)
-        reward_logits = self.reward_predictor(h_z_joined)
-        continue_logits = self.continue_predictor(h_z_joined)
-
-        # Reward is categorical over bins. We return logits for CrossEntropyLoss.
-        reward_dist = reward_logits
-
-        return (
-            obs_reconstruction,
-            posterior_dist.logits,
-            prior_logits,
-            reward_dist,
-            continue_logits,
-        )
+        return predictions
 
     def join_h_and_z(self, h, z):
         z_flat = z.view(z.size(0), -1)

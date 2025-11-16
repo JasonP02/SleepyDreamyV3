@@ -2,9 +2,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.distributions as dist
+import torch.nn.functional as F
+from queue import Full, Empty
 
 from .config import config
-from .trainer_utils import symlog, symexp, twohot_encode
+from .trainer_utils import symlog, symexp, twohot_encode, initalize_critic, initalize_world_model, initialize_actor
 from .encoder import ObservationEncoder
 from .world_model import RSSMWorldModel
 
@@ -18,10 +20,10 @@ class Loader:
         self.device = device
 
     def sample(self):
-        pass
+        return None
 
 
-def train_world_model():
+def train_world_model(data_queue, model_queue):
     """
     The terminology can get confusing.
     p(z|h,x) is the posterior from the perspective of the world model.
@@ -29,30 +31,38 @@ def train_world_model():
     device = torch.device(config.general.device)
     print(f"Using device: {device}")
 
-    encoder = ObservationEncoder(
-        mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn,
-        d_hidden=config.models.d_hidden,
-    ).to(device)
-
-    world_model = RSSMWorldModel(
-        models_config=config.models,
-        env_config=config.environment,
-        batch_size=config.train.batch_size,
-        b_start=config.train.b_start,
-        b_end=config.train.b_end,
-    ).to(device)
+    actor = initialize_actor(device)
+    critic = initalize_critic(device)
+    encoder, world_model = initalize_world_model(device)
 
     # Combine parameters for the optimizer
     all_params = list(encoder.parameters()) + list(world_model.parameters())
-    optimizer = optim.Adam(all_params, lr=1e-4, weight_decay=1e-6)
-    bsz = config.train.batch_size
-    loader = Loader()
+    optimizer = optim.Adam(all_params, lr=1e-4, weight_decay=1e-6) # TODO FIX
+    loader = Loader(batch_size=config.train.batch_size, device=device)
 
-    t = 0
-    while t < config.train.num_time_steps
+    training_step = 0
+    update_frequency = 100 # How often to send models to collector
+
+    while training_step < config.train.num_time_steps:
             # Get a sample from our dataloader
-            pixels, states, actions, rewards, terminated = loader.sample(batch_size, device)
+            try:
+                # pixels, states, actions, rewards, terminated = loader.sample()
+                pixels, states, actions, rewards, terminated = data_queue.get()
+                pixels = torch.from_numpy(pixels).to(device).unsqueeze(0)
+                states = torch.from_numpy(states).to(device).unsqueeze(0)
+                actions = torch.from_numpy(actions).to(device).unsqueeze(0)
+                rewards = torch.from_numpy(rewards).to(device).unsqueeze(0)
+                terminated = torch.from_numpy(terminated).to(device).unsqueeze(0)
+
+            except Empty:
+                continue
+
+            # This is a placeholder for a proper dataloader and batching logic
+            # The current implementation processes one episode at a time.
+            # For real training, you'd batch multiple sequences.
+            batch_idx = 0
+            epoch = 0
+
 
             # Reset hidden states per trajectory and move to device
             world_model.h_prev = torch.zeros_like(world_model.h_prev).to(device)
@@ -69,21 +79,22 @@ def train_world_model():
 
             states = symlog(states)  # symlog vector inputs before model input
 
-            for t in range(pixels.shape[1]):
-                obs_t = {"pixels": pixels[:, t], "state": states[:, t]}
-                action_t = actions[:, t]
-                reward_t = rewards[:, t]
-                terminated_t = terminated[:, t]
+            for t_step in range(pixels.shape[1]):
+                obs_t = {"pixels": pixels[:, t_step], "state": states[:, t_step]}
+                action_t = actions[:, t_step]
+                reward_t = rewards[:, t_step]
+                terminated_t = terminated[:, t_step]
 
-                posterior_logits = encoder(obs_t)
+                posterior_logits = encoder(obs_t) # This is z_t
                 posterior_dist = dist.Categorical(logits=posterior_logits)
-                (
-                    obs_reconstruction,
-                    _, # posterior_logits are already available
-                    prior_logits,
-                    reward_dist,
-                    continue_logits,
-                ) = world_model(obs_t, action_t)
+                
+                # The world model now returns a dictionary of all its outputs
+                wm_outputs = world_model(posterior_dist, action_t)
+                obs_reconstruction = wm_outputs["obs_reconstruction"]
+                reward_dist = wm_outputs["reward_logits"]
+                continue_logits = wm_outputs["continue_logits"]
+                prior_logits = wm_outputs["prior_logits"]
+                h_z_joined = wm_outputs["h_z_joined"]
 
                 # Distribution of mean pixel/observation values
                 # Observation pixels are bernoulli, while observation vectors are gaussian
@@ -145,18 +156,17 @@ def train_world_model():
                 prior_dist = dist.Categorical(logits=prior_logits)
                 free_bits = 1.0
                 l_dyn_raw = dist.kl_divergence(
-                    dist.Categorical(
-                        logits=posterior_dist.logits.detach()
-                    ),
-                    prior_dist,
-                ).mean()
+                    dist.Categorical(logits=posterior_dist.logits.detach()),prior_dist,).mean()
                 l_dyn = torch.max(torch.tensor(free_bits, device=device), l_dyn_raw)
 
                 l_rep_raw = dist.kl_divergence(
-                    posterior_dist,
-                    dist.Categorical(logits=prior_dist.logits.detach()),
-                ).mean()
+                    posterior_dist, dist.Categorical(logits=prior_dist.logits.detach()),).mean()
                 l_rep = torch.max(torch.tensor(free_bits, device=device), l_rep_raw)
+
+                # Actor critic section
+                critic_logits = critic(h_z_joined.detach()) # Use the state from the world model
+                critic_probs = F.softmax(critic_logits, dim=-1)
+                expected_return = critic
 
                 loss = beta_pred * l_pred + beta_dyn * l_dyn + beta_rep * l_rep
 
@@ -174,6 +184,7 @@ def train_world_model():
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
+            training_step += 1
 
             if batch_idx % 10 == 0:  # Print every 10 batches
                 seq_len = pixels.shape[1]
@@ -191,12 +202,23 @@ def train_world_model():
                     f"  Rep: {total_l_rep / seq_len:.4f}",
                 )
 
-        # Save the world model at the end of each epoch
-        print(f"--- End of Epoch {epoch + 1}, saving model... ---")
-        # Save both encoder and world model
-        torch.save(encoder.state_dict(), config.general.encoder_path)
-        torch.save(world_model.state_dict(), config.general.rssm_path)
+            # Periodically send updated models to the collector
+            if training_step % update_frequency == 0:
+                print(f"Trainer: Sending model updates at step {training_step}.")
+                models_to_send = {
+                    'actor': {k: v.cpu() for k, v in actor.state_dict().items()},
+                    'encoder': {k: v.cpu() for k, v in encoder.state_dict().items()},
+                    'world_model': {k: v.cpu() for k, v in world_model.state_dict().items()},
+                }
+                try:
+                    # Clear queue to ensure collector gets the latest version
+                    while not model_queue.empty():
+                        model_queue.get_nowait()
+                    model_queue.put_nowait(models_to_send)
+                except Full:
+                    print("Trainer: Model queue was full. Skipping update.")
+                    pass
 
-
-if __name__ == "__main__":
-    train_world_model()
+    # Save final models
+    torch.save(encoder.state_dict(), config.general.encoder_path)
+    torch.save(world_model.state_dict(), config.general.rssm_path)
