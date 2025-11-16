@@ -93,6 +93,7 @@ class RSSMWorldModel(nn.Module):
             h_i = block(z_embed, action, h_prev_blocks[i])
             outputs.append(h_i)
         h = torch.cat(outputs, dim=-1)
+        self.h_prev = h
         prior_logits = self.dynamics_predictor(h)
         return h, prior_logits
 
@@ -126,7 +127,6 @@ class RSSMWorldModel(nn.Module):
 
         # Step the dynamics to get the new hidden state and prior
         h, prior_logits = self.step_dynamics(z_embed, action, self.h_prev)
-        self.h_prev = h
 
         # Generate predictions using the new state
         predictions = self.predict_heads(h, z_sample)

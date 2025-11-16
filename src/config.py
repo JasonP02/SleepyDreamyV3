@@ -60,12 +60,16 @@ class ModelsConfig(BaseModel):
 
 class TrainConfig(BaseModel):
     num_time_steps: int = 100
+    num_dream_steps: int = 15
     batch_size: int = 1
     beta_dyn: float = 0.99
     beta_rep: float = 0.99
     beta_pred: float = 0.99
     b_start: int = -20
     b_end: int = 21
+    gamma: float = 0.99
+    lam: float = 0.95
+
 
 
 class Config(BaseModel):

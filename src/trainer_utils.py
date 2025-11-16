@@ -79,7 +79,7 @@ def initalize_world_model(device):
 
     return encoder, world_model
 
-def initalize_actor(device):
+def initialize_actor(device):
     d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
         config.models.d_hidden
         * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
