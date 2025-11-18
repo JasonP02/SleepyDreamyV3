@@ -106,12 +106,7 @@ class RSSMWorldModel(nn.Module):
         obs_reconstruction = self.decoder(h_z_joined)
         reward_logits = self.reward_predictor(h_z_joined)
         continue_logits = self.continue_predictor(h_z_joined)
-        return {
-            "obs_reconstruction": obs_reconstruction,
-            "reward_logits": reward_logits,
-            "continue_logits": continue_logits,
-            "h_z_joined": h_z_joined,
-        }
+        return obs_reconstruction, reward_logits, continue_logits, h_z_joined
 
     def forward(self, posterior_dist, action):
         """
@@ -130,10 +125,10 @@ class RSSMWorldModel(nn.Module):
         h, prior_logits = self.step_dynamics(z_embed, action, self.h_prev)
 
         # Generate predictions using the new state
-        predictions = self.predict_heads(h, z_sample)
-        predictions["prior_logits"] = prior_logits
-
-        return predictions
+        (
+            obs_reconstruction, reward_logits, continue_logits, h_z_joined
+        ) = self.predict_heads(h, z_sample)
+        return obs_reconstruction, reward_logits, continue_logits, h_z_joined, prior_logits
 
     def join_h_and_z(self, h, z):
         z_flat = z.view(z.size(0), -1)

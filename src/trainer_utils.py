@@ -1,6 +1,4 @@
 import torch
-from .encoder import ObservationEncoder, ThreeLayerMLP
-from .world_model import RSSMWorldModel
 from .config import config
 
 
@@ -62,6 +60,32 @@ def twohot_encode(x, B):
     return weights
 
 
-def initalize_world_model(device):
+def initialize_actor(device):
+    """Initializes the actor model."""
+    # This import is here to avoid circular dependencies
+    from .encoder import ThreeLayerMLP
+
+    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+    return ThreeLayerMLP(
+        d_in=d_in,
+        d_hidden=config.models.d_hidden,
+        d_out=config.environment.n_actions,
+    ).to(device)
 
 
+def initialize_critic(device):
+    """Initializes the critic model."""
+    from .encoder import ThreeLayerMLP
+
+    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+    return ThreeLayerMLP(
+        d_in=d_in,
+        d_hidden=config.models.d_hidden,
+        d_out=config.train.b_end - config.train.b_start,
+    ).to(device)
