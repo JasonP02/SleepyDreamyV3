@@ -64,7 +64,6 @@ class RSSMWorldModel(nn.Module):
         nn.init.zeros_(self.reward_predictor.weight)  # Reward is initalized to zero
         self.continue_predictor = nn.Linear(h_z_dim, 1)
 
-
         # Decoder. Outputs distribution of mean predictions for pixel/vetor observations
         self.decoder = ObservationDecoder(
             mlp_config=models_config.encoder.mlp,
@@ -101,7 +100,9 @@ class RSSMWorldModel(nn.Module):
         """
         Generates predictions from the model's state (h, z).
         """
-        h_z_joined = self.join_h_and_z(h, z_sample) # This is the state for actor/critic
+        h_z_joined = self.join_h_and_z(
+            h, z_sample
+        )  # This is the state for actor/critic
         obs_reconstruction = self.decoder(h_z_joined)
         reward_logits = self.reward_predictor(h_z_joined)
         continue_logits = self.continue_predictor(h_z_joined)
