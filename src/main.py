@@ -22,10 +22,15 @@ def main():
     parser.add_argument(
         "--train_steps", help="Number of environment steps to use for training"
     )
+    parser.add_argument(
+        "--debug_memory", action="store_true", help="Enable memory profiling prints"
+    )
 
     args = parser.parse_args()
 
     if args.mode == "train":
+        if args.debug_memory:
+            config.general.debug_memory = True
         # set up threads for experience collection and training concurrently
         print("Starting experience collection and training processes...")
 

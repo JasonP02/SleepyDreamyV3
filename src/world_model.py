@@ -60,7 +60,7 @@ class RSSMWorldModel(nn.Module):
 
         # Rewards use two-hot encoding
         reward_out = abs(b_start - b_end)
-        self.reward_predictor = nn.Linear(h_z_dim, reward_out + 1)
+        self.reward_predictor = nn.Linear(h_z_dim, reward_out)
         nn.init.zeros_(self.reward_predictor.weight)  # Reward is initalized to zero
         self.continue_predictor = nn.Linear(h_z_dim, 1)
 

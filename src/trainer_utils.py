@@ -62,6 +62,29 @@ def twohot_encode(x, B):
     return weights
 
 
+def initialize_actor(device):
+    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
+        config.models.d_hidden
+        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
+    )
+    return ThreeLayerMLP(
+        d_in=d_in,
+        d_hidden=config.models.d_hidden,
+        d_out=config.environment.n_actions,
+    ).to(device)
+
+
 def initalize_world_model(device):
-
-
+    encoder = ObservationEncoder(
+        mlp_config=config.models.encoder.mlp,
+        cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
+    ).to(device)
+    world_model = RSSMWorldModel(
+        models_config=config.models,
+        env_config=config.environment,
+        batch_size=1,
+        b_start=config.train.b_start,
+        b_end=config.train.b_end,
+    ).to(device)
+    return encoder, world_model

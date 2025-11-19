@@ -18,6 +18,7 @@ class GeneralConfig(BaseModel):
     device: str = get_default_device()
     encoder_path: str = "encoder.pt"
     rssm_path: str = "rssm.pt"
+    debug_memory: bool = False
 
 
 class EnvironmentConfig(BaseModel):
@@ -69,6 +70,7 @@ class TrainConfig(BaseModel):
     b_end: int = 21
     gamma: float = 0.99
     lam: float = 0.95
+    wm_lr: float = 1e-4
 
 
 

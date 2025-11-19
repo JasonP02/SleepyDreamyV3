@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributions as dist
 import torch.nn.functional as F
+try:
+    import psutil
+except ImportError:
+    psutil = None
+import os
 from queue import Full, Empty
 
 from .config import config
@@ -23,7 +28,7 @@ class WorldModelTrainer:
     ):
         self.device = torch.device(config.general.device)
         self.model_update_frequency = 10 # fix later
-        self.n_dream_steps = config.train.n_dream_steps
+        self.n_dream_steps = config.train.num_dream_steps
         b_start = config.train.b_start
         b_end = config.train.b_end
         beta_range = torch.arange(
@@ -55,15 +60,33 @@ class WorldModelTrainer:
         self.train_step = 0
         self.data_queue = data_queue
         self.model_queue = model_queue
-        self.d_hidden = config.model.d_hidden
+        self.d_hidden = config.models.d_hidden
         self.n_actions = config.environment.n_actions
+
+    def print_memory_usage(self, tag=""):
+        if not config.general.debug_memory:
+            return
+
+        if psutil:
+            process = psutil.Process(os.getpid())
+            ram_usage = process.memory_info().rss / 1024 / 1024  # in MB
+            print(f"[{tag}] RAM Usage: {ram_usage:.2f} MB")
+        else:
+            print(f"[{tag}] RAM Usage: (psutil not installed)")
+
+        if self.device.type == "cuda":
+            vram_usage = torch.cuda.memory_allocated(self.device) / 1024 / 1024
+            print(f"[{tag}] VRAM Usage (CUDA): {vram_usage:.2f} MB")
+        elif self.device.type == "mps":
+            vram_usage = torch.mps.current_allocated_memory() / 1024 / 1024
+            print(f"[{tag}] VRAM Usage (MPS): {vram_usage:.2f} MB")
 
 
     def get_data_from_queue(self):
         try:
             # pixels, states, actions, rewards, terminated = loader.sample()
             pixels, states, actions, rewards, terminated = self.data_queue.get()
-            self.pixels = torch.from_numpy(pixels).to(self.device).unsqueeze(0)
+            self.pixels = torch.from_numpy(pixels).to(self.device).float().unsqueeze(0).permute(0, 1, 4, 2, 3)
             self.states = torch.from_numpy(states).to(self.device).unsqueeze(0)
             self.states = symlog(self.states) # vector states are symlog transformed
             self.actions = torch.from_numpy(actions).to(self.device).unsqueeze(0)
@@ -74,6 +97,7 @@ class WorldModelTrainer:
 
     def train_models(self):
         while self.train_step < self.max_train_steps:
+            self.print_memory_usage(f"Step {self.train_step} Start")
             self.get_data_from_queue() # TODO: Implement batching with this
 
             # Reset hidden states per trajectory and move to self.device
@@ -114,7 +138,7 @@ class WorldModelTrainer:
                 dreamed_actions_sampled
                 ) = self.dream_sequence(
                     h_z_joined,
-                    self.world_model.z_embedding(posterior_dist.probs),
+                    self.world_model.z_embedding(posterior_dist.probs.view(posterior_dist.probs.shape[0], -1)),
                     self.n_dream_steps
                 )
 
@@ -137,8 +161,9 @@ class WorldModelTrainer:
                 lambda_returns_flat = lambda_returns.reshape(-1)
                 critic_targets = twohot_encode(lambda_returns_flat, self.B)
                 
-                critic_loss_fn = nn.CrossEntropyLoss()
-                critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
+                # critic_loss_fn = nn.CrossEntropyLoss()
+                # critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
+                critic_loss = -torch.mean(torch.sum(critic_targets * F.log_softmax(dreamed_values_logits_flat, dim=-1), dim=-1))
 
                 # Actor Loss: Policy gradient with lambda returns as advantage
                 advantage = (lambda_returns - dreamed_values).detach()
@@ -154,12 +179,13 @@ class WorldModelTrainer:
             # optimizer.zero_grad()
             # total_loss.backward()
             # optimizer.step()
-            training_step += 1
+            self.train_step += 1
 
 
             # Periodically send updated models to the collector
-            if training_step % self.model_update_frequency == 0:
-                self.send_models_to_collector(training_step)
+            if self.train_step % self.model_update_frequency == 0:
+                self.print_memory_usage(f"Step {self.train_step} End")
+                self.send_models_to_collector(self.train_step)
 
         torch.save(self.encoder.state_dict(), config.general.encoder_path)
         torch.save(self.world_model.state_dict(), config.general.rssm_path)
@@ -218,7 +244,7 @@ class WorldModelTrainer:
 
 
     def calculate_lambda_returns(
-        dreamed_rewards, dreamed_values, dreamed_continues, gamma, lam, num_dream_steps
+        self, dreamed_rewards, dreamed_values, dreamed_continues, gamma, lam, num_dream_steps
     ):
         """
         Calculates lambda-returns for a dreamed trajectory.
@@ -254,8 +280,7 @@ class WorldModelTrainer:
     ):
         # Observation pixels are bernoulli, while observation vectors are gaussian
         pixel_probs = obs_reconstruction["pixels"]
-        obs_reconstruction["state"]
-        obs_pred = symlog(obs_reconstruction)
+        obs_pred = symlog(obs_reconstruction["state"])
 
         pixel_target = obs_t["pixels"]
         obs_target = obs_t["state"]
@@ -273,17 +298,20 @@ class WorldModelTrainer:
 
         bce_with_logits_loss_fn = nn.BCEWithLogitsLoss()
         # The decoder outputs logits, and the target should be in [0,1]
+        # Resize target to match output
+        pixel_target = F.interpolate(pixel_target, size=pixel_probs.shape[-2:], mode="bilinear")
         pred_loss_pixel = bce_with_logits_loss_fn(
             input=pixel_probs, target=pixel_target / 255.0
         )
 
         reward_target = twohot_encode(reward_t, self.B)
-        reward_loss_fn = nn.CrossEntropyLoss()
-        reward_loss = reward_loss_fn(reward_dist, reward_target)
+        # reward_loss_fn = nn.CrossEntropyLoss()
+        # reward_loss = reward_loss_fn(reward_dist, reward_target)
+        reward_loss = -torch.mean(torch.sum(reward_target * F.log_softmax(reward_dist, dim=-1), dim=-1))
 
         # c. continue predictor
         # The target is 1 if we continue, 0 if we terminate.
-        continue_target = (1.0 - terminated_t).unsqueeze(-1)
+        continue_target = (1.0 - terminated_t.float()).unsqueeze(-1)
         pred_loss_continue = bce_with_logits_loss_fn(
             continue_logits, continue_target
         )
@@ -353,3 +381,11 @@ class WorldModelTrainer:
             d_hidden=config.models.d_hidden,
             d_out=config.train.b_end - config.train.b_start,
         ).to(self.device)
+
+
+def train_world_model(data_queue, model_queue):
+    """
+    Entry point for the training process.
+    """
+    trainer = WorldModelTrainer(config, data_queue, model_queue)
+    trainer.train_models()

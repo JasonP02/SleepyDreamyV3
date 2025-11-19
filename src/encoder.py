@@ -41,7 +41,7 @@ class ObservationEncoder(nn.Module):
 
     def forward(self, x):
         # x is passed as a dict of ['state', 'pixels']
-        image_obs = x["pixels"]
+        image_obs = x["pixels"] / 255.0
         vec_obs = x["state"]
 
         x1 = self.CNN(image_obs)
