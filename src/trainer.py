@@ -3,10 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributions as dist
 import torch.nn.functional as F
-try:
-    import psutil
-except ImportError:
-    psutil = None
+import psutil
 import os
 from queue import Full, Empty
 
@@ -66,38 +63,6 @@ class WorldModelTrainer:
         self.d_hidden = config.models.d_hidden
         self.n_actions = config.environment.n_actions
 
-    def print_memory_usage(self, tag=""):
-        if not config.general.debug_memory:
-            return
-
-        if psutil:
-            process = psutil.Process(os.getpid())
-            ram_usage = process.memory_info().rss / 1024 / 1024  # in MB
-            print(f"[{tag}] RAM Usage: {ram_usage:.2f} MB")
-        else:
-            print(f"[{tag}] RAM Usage: (psutil not installed)")
-
-        if self.device.type == "cuda":
-            vram_usage = torch.cuda.memory_allocated(self.device) / 1024 / 1024
-            print(f"[{tag}] VRAM Usage (CUDA): {vram_usage:.2f} MB")
-        elif self.device.type == "mps":
-            vram_usage = torch.mps.current_allocated_memory() / 1024 / 1024
-            print(f"[{tag}] VRAM Usage (MPS): {vram_usage:.2f} MB")
-
-
-    def get_data_from_queue(self):
-        try:
-            # pixels, states, actions, rewards, terminated = loader.sample()
-            pixels, states, actions, rewards, terminated = self.data_queue.get()
-            self.pixels = torch.from_numpy(pixels).to(self.device).float().unsqueeze(0).permute(0, 1, 4, 2, 3)
-            self.states = torch.from_numpy(states).to(self.device).unsqueeze(0)
-            self.states = symlog(self.states) # vector states are symlog transformed
-            self.actions = torch.from_numpy(actions).to(self.device).unsqueeze(0)
-            self.rewards = torch.from_numpy(rewards).to(self.device).unsqueeze(0)
-            self.terminated = torch.from_numpy(terminated).to(self.device).unsqueeze(0)
-        except Empty:
-            pass
-
     def train_models(self):
         while self.train_step < self.max_train_steps:
             self.print_memory_usage(f"Step {self.train_step} Start")
@@ -146,7 +111,7 @@ class WorldModelTrainer:
                     h_z_joined,
                     self.world_model.z_embedding(posterior_dist.probs.view(1, -1)),
                     self.n_dream_steps
-                    )
+                )
 
                 # Predict rewards and values for the dreamed states
                 dreamed_rewards_logits = self.world_model.reward_predictor(dreamed_recurrent_states)
@@ -178,8 +143,11 @@ class WorldModelTrainer:
                     dreamed_actions_sampled
                 )
 
+                wm_loss.backward()
+                actor_loss.backward()
+                critic_loss.backward()
 
-                total_loss += wm_loss + critic_loss + actor_loss
+                self.optimizer.step()
 
             # Perform backpropagation on the accumulated loss for the entire sequence
             # optimizer.zero_grad()
@@ -413,6 +381,36 @@ class WorldModelTrainer:
             d_hidden=config.models.d_hidden,
             d_out=config.train.b_end - config.train.b_start,
         ).to(self.device)
+
+    def print_memory_usage(self, tag=""):
+        if not config.general.debug_memory:
+            return
+
+        if psutil:
+            process = psutil.Process(os.getpid())
+            ram_usage = process.memory_info().rss / 1024 / 1024  # in MB
+            print(f"[{tag}] RAM Usage: {ram_usage:.2f} MB")
+
+        if self.device.type == "cuda":
+            vram_usage = torch.cuda.memory_allocated(self.device) / 1024 / 1024
+            print(f"[{tag}] VRAM Usage (CUDA): {vram_usage:.2f} MB")
+        elif self.device.type == "mps":
+            vram_usage = torch.mps.current_allocated_memory() / 1024 / 1024
+            print(f"[{tag}] VRAM Usage (MPS): {vram_usage:.2f} MB")
+
+
+    def get_data_from_queue(self):
+        try:
+            # pixels, states, actions, rewards, terminated = loader.sample()
+            pixels, states, actions, rewards, terminated = self.data_queue.get()
+            self.pixels = torch.from_numpy(pixels).to(self.device).float().unsqueeze(0).permute(0, 1, 4, 2, 3)
+            self.states = torch.from_numpy(states).to(self.device).unsqueeze(0)
+            self.states = symlog(self.states) # vector states are symlog transformed
+            self.actions = torch.from_numpy(actions).to(self.device).unsqueeze(0)
+            self.rewards = torch.from_numpy(rewards).to(self.device).unsqueeze(0)
+            self.terminated = torch.from_numpy(terminated).to(self.device).unsqueeze(0)
+        except Empty:
+            pass
 
 
 def train_world_model(data_queue, model_queue):
