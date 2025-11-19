@@ -7,9 +7,7 @@ import torch.nn.functional as F
 from queue import Empty
 
 from .config import config
-from .world_model import RSSMWorldModel 
-from .encoder import ObservationEncoder
-from .trainer_utils import initialize_actor
+from .trainer_utils import initialize_actor, initialize_world_model
 
 
 def create_env_with_vision():
@@ -28,18 +26,7 @@ def collect_experiences(data_queue, model_queue):
     env = create_env_with_vision()
     device = "cpu" # Collector runs on CPU
     actor = initialize_actor(device=device)
-    encoder = ObservationEncoder(
-        mlp_config=config.models.encoder.mlp,
-        cnn_config=config.models.encoder.cnn,
-        d_hidden=config.models.d_hidden,
-    ).to(device)
-    world_model = RSSMWorldModel(
-        models_config=config.models,
-        env_config=config.environment,
-        batch_size=1,  # For inference, batch size is 1
-        b_start=b_start,
-        b_end=b_end,
-    ).to(device)
+    encoder, world_model = initialize_world_model(device, batch_size=1)
 
     # Move models to eval mode
     actor.eval()

@@ -92,7 +92,10 @@ class RSSMWorldModel(nn.Module):
             h_i = block(z_embed, action, h_prev_blocks[i])
             outputs.append(h_i)
         h = torch.cat(outputs, dim=-1)
-        self.h_prev = h
+        # Detach and clone before storing to avoid in-place modification of computation graph
+        # Gradients flow through h directly, not through stored h_prev
+        # Use clone() to ensure we create a new tensor, not a view
+        self.h_prev = h.detach().clone()
         prior_logits = self.dynamics_predictor(h)
         return h, prior_logits
 

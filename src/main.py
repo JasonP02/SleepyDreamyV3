@@ -39,7 +39,7 @@ def main():
         data_queue = mp.Queue(maxsize=config.train.batch_size * 5)
         model_queue = mp.Queue(maxsize=1)
         experience_loop = mp.Process(target=collect_experiences, args=(data_queue,model_queue))
-        trainer_loop = mp.Process(target=train_world_model, args=(data_queue,model_queue))
+        trainer_loop = mp.Process(target=train_world_model, args=(config, data_queue, model_queue))
 
         experience_loop.start()
         trainer_loop.start()

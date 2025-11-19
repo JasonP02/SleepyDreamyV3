@@ -1,5 +1,27 @@
 import torch
+import torch.nn.functional as F
 from .config import config
+from .encoder import ThreeLayerMLP, ObservationEncoder
+from .world_model import RSSMWorldModel
+
+
+def resize_pixels_to_target(pixels, target_size):
+    """
+    Resize pixel tensors to target_size. Handles both single images and batches.
+    
+    Args:
+        pixels: Tensor of shape (B, C, H, W) or (T, C, H, W) or (B, T, C, H, W)
+        target_size: Tuple of (height, width) to resize to
+    
+    Returns:
+        Resized tensor with same batch/time dimensions but H, W resized to target_size
+    """
+    return F.interpolate(
+        pixels,
+        size=target_size,
+        mode="bilinear",
+        align_corners=False
+    )
 
 
 def symlog(x):
@@ -60,16 +82,6 @@ def twohot_encode(x, B):
     return weights
 
 
-def initialize_actor(device):
-    d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
-        config.models.d_hidden
-        * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
-    )
-    return ThreeLayerMLP(
-        d_in=d_in,
-        d_hidden=config.models.d_hidden,
-        d_out=config.environment.n_actions,
-    ).to(device)
 
 
 def initialize_actor(device):
@@ -101,7 +113,7 @@ def initialize_critic(device):
         d_hidden=config.models.d_hidden,
         d_out=config.train.b_end - config.train.b_start,
     ).to(device)
-def initalize_world_model(device):
+def initialize_world_model(device, batch_size=1):
     encoder = ObservationEncoder(
         mlp_config=config.models.encoder.mlp,
         cnn_config=config.models.encoder.cnn,
@@ -110,7 +122,7 @@ def initalize_world_model(device):
     world_model = RSSMWorldModel(
         models_config=config.models,
         env_config=config.environment,
-        batch_size=1,
+        batch_size=batch_size,
         b_start=config.train.b_start,
         b_end=config.train.b_end,
     ).to(device)

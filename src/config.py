@@ -15,10 +15,12 @@ def get_default_device():
 
 
 class GeneralConfig(BaseModel):
+    debug_memory: bool = False
     device: str = get_default_device()
     encoder_path: str = "encoder.pt"
-    rssm_path: str = "rssm.pt"
-    debug_memory: bool = False
+    world_model_path: str = "world_model.pt"
+    train_world_model: bool = True
+    env_bootstrapping_samples: str = "bootstrap_trajectorires.h5"
 
 
 class EnvironmentConfig(BaseModel):
@@ -54,24 +56,32 @@ class EncoderConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
-    d_hidden: int = 256
+    d_hidden: int = 64
     encoder: EncoderConfig = EncoderConfig()
     rnn: GRUConfig = GRUConfig()
 
 
 class TrainConfig(BaseModel):
-    num_time_steps: int = 100
-    num_dream_steps: int = 15
+    sequence_length: int = 50
+    max_train_steps: int = 10000
+    num_dream_steps: int = 10
+    gamma: float = 0.99
+    lam: float = 0.95
+    wm_lr: float = 1e-4
+    critic_lr: float = 1e-4
+    actor_lr: float = 1e-4
+    weight_decay: float = 1e-6
     batch_size: int = 1
+    steps_per_weight_sync: int = 5
     beta_dyn: float = 0.99
     beta_rep: float = 0.99
     beta_pred: float = 0.99
     b_start: int = -20
     b_end: int = 21
-    gamma: float = 0.99
-    lam: float = 0.95
-    wm_lr: float = 1e-4
-
+    # Actor training stabilization
+    actor_entropy_coef: float = 1e-3  # Entropy regularization coefficient
+    normalize_advantages: bool = True  # Normalize advantages to stabilize training
+    actor_warmup_steps: int = 0  # Delay actor training until world model improves
 
 
 class Config(BaseModel):

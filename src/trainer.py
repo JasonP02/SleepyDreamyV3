@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributions as dist
 import torch.nn.functional as F
-import psutil
-import os
 from queue import Full, Empty
+from torch.utils.tensorboard import SummaryWriter
+import os
 
 from .config import config
 from .trainer_utils import (
@@ -14,6 +14,8 @@ from .trainer_utils import (
     twohot_encode,
     initialize_actor,
     initialize_critic,
+    initialize_world_model,
+    resize_pixels_to_target,
 )
 from .encoder import ObservationEncoder, ThreeLayerMLP
 from .world_model import RSSMWorldModel
@@ -28,6 +30,11 @@ class WorldModelTrainer:
         self.device = torch.device(config.general.device)
         self.model_update_frequency = 10 # fix later
         self.n_dream_steps = config.train.num_dream_steps
+        self.gamma = config.train.gamma
+        self.lam = config.train.lam
+        self.actor_entropy_coef = config.train.actor_entropy_coef
+        self.normalize_advantages = config.train.normalize_advantages
+        self.actor_warmup_steps = config.train.actor_warmup_steps
         b_start = config.train.b_start
         b_end = config.train.b_end
         beta_range = torch.arange(
@@ -39,41 +46,95 @@ class WorldModelTrainer:
 
         self.actor = initialize_actor(self.device)
         self.critic = initialize_critic(self.device)
-        self.encoder = ObservationEncoder(
-            mlp_config=config.models.encoder.mlp,
-            cnn_config=config.models.encoder.cnn,
-            d_hidden=config.models.d_hidden,
-        ).to(self.device)
-        self.world_model = RSSMWorldModel(
-            models_config=config.models,
-            env_config=config.environment,
-            batch_size=config.train.batch_size,
-            b_start=b_start,
-            b_end=b_end,
-        ).to(self.device)
+        self.encoder, self.world_model = initialize_world_model(
+            self.device,
+            batch_size=config.train.batch_size
+        )
 
         self.wm_params = list(self.encoder.parameters()) + list(self.world_model.parameters())
-        # TODO: Add learning rate from config
-        self.wm_optimizer = optim.Adam(self.wm_params, lr=1e-4, weight_decay=1e-6)
+        self.wm_optimizer = optim.Adam(
+            self.wm_params, lr=config.train.wm_lr, weight_decay=config.train.weight_decay)
+        self.critic_optimizer = optim.Adam(
+            self.critic.parameters(), lr=config.train.critic_lr, weight_decay=config.train.weight_decay)
+        self.actor_optimizer = optim.Adam(
+            self.actor.parameters(), lr=config.train.actor_lr, weight_decay=config.train.weight_decay)
 
-        self.max_train_steps = config.train.num_time_steps
+        self.max_train_steps = config.train.max_train_steps
         self.train_step = 0
         self.data_queue = data_queue
         self.model_queue = model_queue
         self.d_hidden = config.models.d_hidden
         self.n_actions = config.environment.n_actions
+        self.steps_per_weight_sync = config.train.steps_per_weight_sync
+
+        # Initialize TensorBoard writer
+        log_dir = "runs"
+        os.makedirs(log_dir, exist_ok=True)
+        self.writer = SummaryWriter(log_dir=log_dir)
+
+
+    def get_data_from_queue(self):
+        try:
+            # pixels, states, actions, rewards, terminated = loader.sample()
+            pixels, states, actions, rewards, terminated = self.data_queue.get()
+            # Convert pixels from (T, H, W, C) to (1, T, C, H, W) and resize to target_size
+            # Batch dimension B=1 is kept from the start for proper batching
+            # Encoder expects (B, C, H, W) at target_size
+            pixels_tensor = torch.from_numpy(pixels).to(self.device).float().permute(0, 3, 1, 2)  # (T, C, H, W)
+            pixels_tensor = resize_pixels_to_target(pixels_tensor, config.models.encoder.cnn.target_size)  # (T, C, H, W)
+            self.pixels = pixels_tensor.unsqueeze(0)  # (1, T, C, H, W) - batch dimension for encoder
+            self.states = torch.from_numpy(states).to(self.device).unsqueeze(0)
+            self.states = symlog(self.states) # vector states are symlog transformed
+            self.actions = torch.from_numpy(actions).to(self.device).unsqueeze(0)
+            self.rewards = torch.from_numpy(rewards).to(self.device).unsqueeze(0)
+            self.terminated = torch.from_numpy(terminated).to(self.device).unsqueeze(0)
+        except Empty:
+            pass
 
     def train_models(self):
+        torch.autograd.set_detect_anomaly(True)
         while self.train_step < self.max_train_steps:
-            self.print_memory_usage(f"Step {self.train_step} Start")
             self.get_data_from_queue() # TODO: Implement batching with this
+
+            # Skip if no data was retrieved
+            if not hasattr(self, 'pixels') or self.pixels.shape[1] == 0:
+                print(f"Trainer: No data was retrieved at step {self.train_step}.")
+                continue
 
             # Reset hidden states per trajectory and move to self.device
             self.world_model.h_prev = torch.zeros_like(self.world_model.h_prev).to(self.device)
 
-            total_loss = 0
+            # Zero gradients before accumulating losses
+            self.wm_optimizer.zero_grad()
+            self.critic_optimizer.zero_grad()
+            self.actor_optimizer.zero_grad()
 
-            for t_step in range(self.pixels.shape[1]):
+            # Initialize loss accumulators - will be set on first iteration
+            total_wm_loss = None
+            total_actor_loss = None
+            total_critic_loss = None
+            # Accumulate individual loss components for logging
+            wm_loss_components = {
+                'prediction_pixel': 0.0,
+                'prediction_vector': 0.0,
+                'prediction_reward': 0.0,
+                'prediction_continue': 0.0,
+                'dynamics': 0.0,
+                'representation': 0.0,
+                'kl_dynamics_raw': 0.0,
+                'kl_representation_raw': 0.0,
+            }
+            # Accumulate dreamed trajectory stats for logging
+            dreamed_rewards_list = []
+            dreamed_values_list = []
+            actor_entropy_list = []  # Track actor entropy for monitoring
+            # Initialize loss variables in case loop doesn't execute
+            wm_loss = torch.tensor(0.0, device=self.device)
+            actor_loss = torch.tensor(0.0, device=self.device)
+            critic_loss = torch.tensor(0.0, device=self.device)
+
+            for t_step in range(self.pixels.shape[1]):  # shape[1] is time dimension in (1, T, C, H, W)
+                # Extract time step with batch dimension: (1, T, C, H, W) -> (1, C, H, W)
                 obs_t = {"pixels": self.pixels[:, t_step], "state": self.states[:, t_step]}
                 action_t = self.actions[:, t_step]
                 reward_t = self.rewards[:, t_step]
@@ -91,7 +152,7 @@ class WorldModelTrainer:
                 ) = self.world_model(posterior_dist, action_t)
 
                 # Updating loss of encoder and world model
-                wm_loss = self.update_wm_loss(
+                wm_loss, wm_loss_dict = self.update_wm_loss(
                     obs_reconstruction,
                     obs_t,
                     reward_dist,
@@ -102,7 +163,13 @@ class WorldModelTrainer:
                     prior_logits
                     )
                 
+                # Accumulate individual loss components
+                for key in wm_loss_components:
+                    wm_loss_components[key] += wm_loss_dict[key].item()
+                
                 # --- Dream Sequence for Actor-Critic ---
+                # Save h_prev to restore after dream sequence to avoid inplace modification issues
+                h_prev_backup = self.world_model.h_prev.clone()
                 (
                     dreamed_recurrent_states,
                     dreamed_actions_logits,
@@ -111,58 +178,110 @@ class WorldModelTrainer:
                     h_z_joined,
                     self.world_model.z_embedding(posterior_dist.probs.view(1, -1)),
                     self.n_dream_steps
-                )
+                    )
+                # Restore h_prev to avoid affecting the computation graph
+                self.world_model.h_prev = h_prev_backup
 
                 # Predict rewards and values for the dreamed states
-                dreamed_rewards_logits = self.world_model.reward_predictor(dreamed_recurrent_states)
+                dreamed_rewards_logits = self.world_model.reward_predictor(
+                    dreamed_recurrent_states
+                ).detach()
                 dreamed_rewards_probs = F.softmax(dreamed_rewards_logits, dim=-1)
-                dreamed_rewards = torch.sum(dreamed_rewards_probs * self.B, dim=-1)
+                dreamed_rewards = torch.sum(dreamed_rewards_probs * self.B, dim=-1).detach()
+                dreamed_rewards_list.append(dreamed_rewards.detach().cpu())
 
-                dreamed_continues = self.world_model.continue_predictor(dreamed_recurrent_states)
+                dreamed_continues = self.world_model.continue_predictor(
+                    dreamed_recurrent_states
+                ).detach()
 
                 dreamed_values_logits = self.critic(dreamed_recurrent_states)
                 dreamed_values_probs = F.softmax(dreamed_values_logits, dim=-1)
                 dreamed_values = torch.sum(dreamed_values_probs * self.B, dim=-1)
+                dreamed_values_list.append(dreamed_values.detach().cpu())
 
                 lambda_returns = self.calculate_lambda_returns(
-                    dreamed_rewards, dreamed_values, dreamed_continues, config.train.gamma, config.train.lam, self.n_dream_steps
+                    dreamed_rewards,
+                    dreamed_values,
+                    dreamed_continues,
+                    self.gamma,
+                    self.lam,
+                    self.n_dream_steps
                 )
 
-                dreamed_values_logits_flat = dreamed_values_logits.view(-1, dreamed_values_logits.size(-1))
-                lambda_returns_flat = lambda_returns.reshape(-1)
-                critic_targets = twohot_encode(lambda_returns_flat, self.B)
-                
-                # critic_loss_fn = nn.CrossEntropyLoss()
-                # critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
-                critic_loss = -torch.mean(torch.sum(critic_targets * F.log_softmax(dreamed_values_logits_flat, dim=-1), dim=-1))
-                actor_loss, critic_loss = self.update_actor_critic_losses(
+                actor_loss, critic_loss, entropy = self.update_actor_critic_losses(
                     dreamed_values_logits,
                     dreamed_values,
                     lambda_returns,
                     dreamed_actions_logits,
                     dreamed_actions_sampled
                 )
+                actor_entropy_list.append(entropy.detach().cpu())
 
-                wm_loss.backward()
-                actor_loss.backward()
-                critic_loss.backward()
+                # Accumulate losses using regular assignment (not in-place)
+                # Only accumulate actor loss after warmup period
+                if total_wm_loss is None:
+                    total_wm_loss = wm_loss
+                    if self.train_step >= self.actor_warmup_steps:
+                        total_actor_loss = actor_loss
+                    else:
+                        total_actor_loss = torch.tensor(0.0, device=self.device, requires_grad=False)
+                    total_critic_loss = critic_loss
+                else:
+                    # Type checker: total_wm_loss is guaranteed to be a tensor here
+                    total_wm_loss = total_wm_loss + wm_loss  # type: ignore
+                    if self.train_step >= self.actor_warmup_steps:
+                        total_actor_loss = total_actor_loss + actor_loss  # type: ignore
+                    total_critic_loss = total_critic_loss + critic_loss  # type: ignore
 
-                self.optimizer.step()
+            # Backpropagate through all objectives before updating weights to avoid
+            # autograd version issues from in-place optimizer steps.
+            # Use retain_graph=True because critic and actor losses also depend on world_model through dream sequence
+            assert (
+                total_wm_loss is not None
+                and total_actor_loss is not None
+                and total_critic_loss is not None
+            )
+            total_wm_loss.backward(retain_graph=True)
+            total_critic_loss.backward(retain_graph=True)
+            
+            # Only train actor after warmup period (allows world model to improve first)
+            if self.train_step >= self.actor_warmup_steps:
+                total_actor_loss.backward()
+            # Note: total_actor_loss is already set to zero tensor during warmup in accumulation phase
 
-            # Perform backpropagation on the accumulated loss for the entire sequence
-            # optimizer.zero_grad()
-            # total_loss.backward()
-            # optimizer.step()
+            self.wm_optimizer.step()
+            self.critic_optimizer.step()
+            if self.train_step >= self.actor_warmup_steps:
+                self.actor_optimizer.step()
+
             self.train_step += 1
 
+            # Log metrics to TensorBoard
+            sequence_length = self.pixels.shape[1] if hasattr(self, 'pixels') else 0
+            self.log_metrics(
+                total_wm_loss,
+                total_actor_loss,
+                total_critic_loss,
+                wm_loss_components,
+                sequence_length,
+                dreamed_rewards_list,
+                dreamed_values_list,
+                actor_entropy_list
+            )
 
             # Periodically send updated models to the collector
-            if self.train_step % self.model_update_frequency == 0:
-                self.print_memory_usage(f"Step {self.train_step} End")
+            if self.train_step % self.steps_per_weight_sync == 0:
+                print(f"Trainer: Sending model updates at step {self.train_step}.")
+                print(f"World Model Loss: {total_wm_loss.item()}")
+                print(f"Actor Loss: {total_actor_loss.item()}")
+                print(f"Critic Loss: {total_critic_loss.item()}")
                 self.send_models_to_collector(self.train_step)
 
         torch.save(self.encoder.state_dict(), config.general.encoder_path)
-        torch.save(self.world_model.state_dict(), config.general.rssm_path)
+        torch.save(self.world_model.state_dict(), config.general.world_model_path)
+        
+        # Close TensorBoard writer
+        self.writer.close()
 
     def update_actor_critic_losses(
             self,
@@ -173,11 +292,13 @@ class WorldModelTrainer:
             dreamed_actions_sampled
     ):
         
-        dreamed_values_logits_flat = dreamed_values_logits.view(-1, dreamed_values_logits.size(-1)) lambda_returns_flat = lambda_returns.reshape(-1)
+        dreamed_values_logits_flat = dreamed_values_logits.view(-1, dreamed_values_logits.size(-1))
+        lambda_returns_flat = lambda_returns.reshape(-1)
         critic_targets = twohot_encode(lambda_returns_flat, self.B)
         
-        critic_loss_fn = nn.CrossEntropyLoss()
-        critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
+        # Use soft cross-entropy for soft targets (twohot encoding)
+        # -sum(targets * log_softmax(logits))
+        critic_loss = -torch.sum(critic_targets * F.log_softmax(dreamed_values_logits_flat, dim=-1), dim=-1).mean()
 
         # Actor Loss: Policy gradient with lambda returns as advantage
         advantage = (lambda_returns - dreamed_values).detach()
@@ -187,7 +308,7 @@ class WorldModelTrainer:
         # Reinforce algorithm: log_prob * advantage
         actor_loss = -torch.mean(log_probs * advantage)
 
-        return actor_loss, critic_loss
+        return actor_loss, critic_loss, entropy
 
 
     def dream_sequence(
@@ -203,13 +324,15 @@ class WorldModelTrainer:
         dreamed_actions_logits = []
         dreamed_actions_sampled = []
 
-        # Start dreaming from the provided initial state
-        dream_h = initial_h
-        dream_z_embed = initial_z_embed
+        # Treat the world model rollout as a fixed simulator for actor/critic updates.
+        # We detach the starting state and all subsequent transitions so gradients do
+        # not flow back into the world model when optimizing the policy or value head.
+        dream_h = initial_h.detach()
+        dream_z_embed = initial_z_embed.detach()
 
         for _ in range(num_dream_steps):
-            dreamed_recurrent_states.append(dream_h)
-            action_logits = self.actor(dream_h)
+            dreamed_recurrent_states.append(dream_h.detach())
+            action_logits = self.actor(dream_h.detach())
             dreamed_actions_logits.append(action_logits)
 
             action_dist = torch.distributions.Categorical(logits=action_logits)
@@ -230,10 +353,10 @@ class WorldModelTrainer:
             ).float()
 
             # 3. Form the full state (h, z) for the next iteration's predictions
-            dream_h = self.world_model.join_h_and_z(dream_h_dyn, dream_z_sample)
+            dream_h = self.world_model.join_h_and_z(dream_h_dyn, dream_z_sample).detach()
             dream_z_embed = self.world_model.z_embedding(
                 dream_z_sample.view(dream_z_sample.size(0), -1)
-            )
+            ).detach()
 
         # Stack the collected dreamed states and actions
         return (
@@ -244,7 +367,13 @@ class WorldModelTrainer:
 
 
     def calculate_lambda_returns(
-        self, dreamed_rewards, dreamed_values, dreamed_continues, gamma, lam, num_dream_steps
+        self,
+        dreamed_rewards,
+        dreamed_values,
+        dreamed_continues,
+        gamma,
+        lam,
+        num_dream_steps
     ):
         """
         Calculates lambda-returns for a dreamed trajectory.
@@ -280,7 +409,7 @@ class WorldModelTrainer:
     ):
         # Observation pixels are bernoulli, while observation vectors are gaussian
         pixel_probs = obs_reconstruction["pixels"]
-        obs_pred = symlog(obs_reconstruction["state"])
+        obs_pred = symlog(obs_reconstruction["state"])  # Apply symlog only to state vector
 
         pixel_target = obs_t["pixels"]
         obs_target = obs_t["state"]
@@ -298,16 +427,15 @@ class WorldModelTrainer:
 
         bce_with_logits_loss_fn = nn.BCEWithLogitsLoss()
         # The decoder outputs logits, and the target should be in [0,1]
-        # Resize target to match output
-        pixel_target = F.interpolate(pixel_target, size=pixel_probs.shape[-2:], mode="bilinear")
+        # Target pixels are already resized to target_size when loading data
         pred_loss_pixel = bce_with_logits_loss_fn(
             input=pixel_probs, target=pixel_target / 255.0
         )
 
         reward_target = twohot_encode(reward_t, self.B)
-        # reward_loss_fn = nn.CrossEntropyLoss()
-        # reward_loss = reward_loss_fn(reward_dist, reward_target)
-        reward_loss = -torch.mean(torch.sum(reward_target * F.log_softmax(reward_dist, dim=-1), dim=-1))
+        # Use soft cross-entropy for soft targets (twohot encoding)
+        # reward_dist should be logits, reward_target is probabilities
+        reward_loss = -torch.sum(reward_target * F.log_softmax(reward_dist, dim=-1), dim=-1).mean()
 
         # c. continue predictor
         # The target is 1 if we continue, 0 if we terminate.
@@ -340,10 +468,119 @@ class WorldModelTrainer:
         ).mean()
         l_rep = torch.max(torch.tensor(free_bits, device=self.device), l_rep_raw)
 
-        return beta_pred * l_pred + beta_dyn * l_dyn + beta_rep * l_rep
+        total_loss = beta_pred * l_pred + beta_dyn * l_dyn + beta_rep * l_rep
+        
+        # Return both total loss and individual components for logging
+        loss_dict = {
+            'prediction_pixel': pred_loss_pixel,
+            'prediction_vector': pred_loss_vector,
+            'prediction_reward': reward_loss,
+            'prediction_continue': pred_loss_continue,
+            'dynamics': l_dyn,
+            'representation': l_rep,
+            'kl_dynamics_raw': l_dyn_raw,
+            'kl_representation_raw': l_rep_raw,
+        }
+        
+        return total_loss, loss_dict
+
+    def log_metrics(
+        self,
+        total_wm_loss,
+        total_actor_loss,
+        total_critic_loss,
+        wm_loss_components,
+        sequence_length,
+        dreamed_rewards_list,
+        dreamed_values_list,
+        actor_entropy_list
+    ):
+        """Log metrics to TensorBoard."""
+        step = self.train_step
+        
+        # Safety check - should not happen due to assertions, but just in case
+        if total_wm_loss is None or total_actor_loss is None or total_critic_loss is None:
+            return
+        
+        # Core losses
+        self.writer.add_scalar("loss/world_model/total", total_wm_loss.item(), step)
+        self.writer.add_scalar("loss/actor/total", total_actor_loss.item(), step)
+        self.writer.add_scalar("loss/critic/total", total_critic_loss.item(), step)
+        
+        # World model component losses
+        if sequence_length > 0:
+            # Normalize by sequence length
+            norm = 1.0 / sequence_length
+            self.writer.add_scalar(
+                "loss/world_model/prediction/pixel",
+                wm_loss_components['prediction_pixel'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "loss/world_model/prediction/vector",
+                wm_loss_components['prediction_vector'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "loss/world_model/prediction/reward",
+                wm_loss_components['prediction_reward'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "loss/world_model/prediction/continue",
+                wm_loss_components['prediction_continue'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "loss/world_model/dynamics",
+                wm_loss_components['dynamics'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "loss/world_model/representation",
+                wm_loss_components['representation'] * norm,
+                step
+            )
+            
+            # Debugging: Raw KL divergences (before free bits clipping)
+            self.writer.add_scalar(
+                "debug/kl_dynamics_raw",
+                wm_loss_components['kl_dynamics_raw'] * norm,
+                step
+            )
+            self.writer.add_scalar(
+                "debug/kl_representation_raw",
+                wm_loss_components['kl_representation_raw'] * norm,
+                step
+            )
+        
+        # Dreamed trajectory statistics (debugging metrics)
+        if dreamed_rewards_list:
+            all_dreamed_rewards = torch.cat(dreamed_rewards_list, dim=0)
+            self.writer.add_scalar("debug/dream/reward/mean", all_dreamed_rewards.mean().item(), step)
+            self.writer.add_scalar("debug/dream/reward/std", all_dreamed_rewards.std().item(), step)
+            self.writer.add_scalar("debug/dream/reward/min", all_dreamed_rewards.min().item(), step)
+            self.writer.add_scalar("debug/dream/reward/max", all_dreamed_rewards.max().item(), step)
+        
+        if dreamed_values_list:
+            all_dreamed_values = torch.cat(dreamed_values_list, dim=0)
+            self.writer.add_scalar("debug/dream/value/mean", all_dreamed_values.mean().item(), step)
+            self.writer.add_scalar("debug/dream/value/std", all_dreamed_values.std().item(), step)
+        
+        # Actor entropy (important for monitoring exploration)
+        if actor_entropy_list:
+            all_entropy = torch.cat(actor_entropy_list, dim=0)
+            self.writer.add_scalar("actor/entropy/mean", all_entropy.mean().item(), step)
+            self.writer.add_scalar("actor/entropy/std", all_entropy.std().item(), step)
+        
+        # Learning rates
+        self.writer.add_scalar("training/learning_rate/world_model", self.wm_optimizer.param_groups[0]['lr'], step)
+        self.writer.add_scalar("training/learning_rate/actor", self.actor_optimizer.param_groups[0]['lr'], step)
+        self.writer.add_scalar("training/learning_rate/critic", self.critic_optimizer.param_groups[0]['lr'], step)
+        
+        self.writer.flush()
 
     def send_models_to_collector(self, training_step):
-        print(f"Trainer: Sending model updates at step {training_step}.")
         models_to_send = {
             "actor": {k: v.cpu() for k, v in self.actor.state_dict().items()},
             "encoder": {k: v.cpu() for k, v in self.encoder.state_dict().items()},
@@ -360,63 +597,6 @@ class WorldModelTrainer:
             print("Trainer: Model queue was full. Skipping update.")
             pass
 
-    def initialize_actor(self):
-        d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
-            config.models.d_hidden
-            * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
-        )
-        return ThreeLayerMLP(
-            d_in=d_in,
-            d_hidden=config.models.d_hidden,
-            d_out=config.environment.n_actions,
-        ).to(self.device)
-
-    def initalize_critic(self):
-        d_in = (config.models.d_hidden * config.models.rnn.n_blocks) + (
-            config.models.d_hidden
-            * (config.models.d_hidden // config.models.encoder.mlp.latent_categories)
-        )
-        return ThreeLayerMLP(
-            d_in=d_in,
-            d_hidden=config.models.d_hidden,
-            d_out=config.train.b_end - config.train.b_start,
-        ).to(self.device)
-
-    def print_memory_usage(self, tag=""):
-        if not config.general.debug_memory:
-            return
-
-        if psutil:
-            process = psutil.Process(os.getpid())
-            ram_usage = process.memory_info().rss / 1024 / 1024  # in MB
-            print(f"[{tag}] RAM Usage: {ram_usage:.2f} MB")
-
-        if self.device.type == "cuda":
-            vram_usage = torch.cuda.memory_allocated(self.device) / 1024 / 1024
-            print(f"[{tag}] VRAM Usage (CUDA): {vram_usage:.2f} MB")
-        elif self.device.type == "mps":
-            vram_usage = torch.mps.current_allocated_memory() / 1024 / 1024
-            print(f"[{tag}] VRAM Usage (MPS): {vram_usage:.2f} MB")
-
-
-    def get_data_from_queue(self):
-        try:
-            # pixels, states, actions, rewards, terminated = loader.sample()
-            pixels, states, actions, rewards, terminated = self.data_queue.get()
-            self.pixels = torch.from_numpy(pixels).to(self.device).float().unsqueeze(0).permute(0, 1, 4, 2, 3)
-            self.states = torch.from_numpy(states).to(self.device).unsqueeze(0)
-            self.states = symlog(self.states) # vector states are symlog transformed
-            self.actions = torch.from_numpy(actions).to(self.device).unsqueeze(0)
-            self.rewards = torch.from_numpy(rewards).to(self.device).unsqueeze(0)
-            self.terminated = torch.from_numpy(terminated).to(self.device).unsqueeze(0)
-        except Empty:
-            pass
-
-
-def train_world_model(data_queue, model_queue):
-    """
-    Entry point for the training process.
-    """
+def train_world_model(config, data_queue, model_queue):
     trainer = WorldModelTrainer(config, data_queue, model_queue)
     trainer.train_models()
-            pass

@@ -958,7 +958,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "swig", specifier = ">=4.3.1.post0" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
+    { name = "tensorboard", specifier = ">=2.18.0" },
     { name = "torch", specifier = ">=2.9.0" },
 ]
 

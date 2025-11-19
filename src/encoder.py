@@ -41,6 +41,7 @@ class ObservationEncoder(nn.Module):
 
     def forward(self, x):
         # x is passed as a dict of ['state', 'pixels']
+        # Expect pixels in (B, C, H, W) format - conversion happens once when loading data
         image_obs = x["pixels"] / 255.0
         vec_obs = x["state"]
 
