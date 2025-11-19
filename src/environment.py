@@ -7,7 +7,10 @@ import torch.nn.functional as F
 from queue import Empty
 
 from .config import config
-from .trainer_utils import initialize_actor, initalize_world_model
+from .world_model import RSSMWorldModel 
+from .encoder import ObservationEncoder
+from .trainer_utils import initialize_actor
+
 
 def create_env_with_vision():
     base_env = gym.make(config.environment.environment_name, render_mode="rgb_array")
@@ -25,7 +28,18 @@ def collect_experiences(data_queue, model_queue):
     env = create_env_with_vision()
     device = "cpu" # Collector runs on CPU
     actor = initialize_actor(device=device)
-    encoder, world_model = initalize_world_model(device=device)
+    encoder = ObservationEncoder(
+        mlp_config=config.models.encoder.mlp,
+        cnn_config=config.models.encoder.cnn,
+        d_hidden=config.models.d_hidden,
+    ).to(device)
+    world_model = RSSMWorldModel(
+        models_config=config.models,
+        env_config=config.environment,
+        batch_size=1,  # For inference, batch size is 1
+        b_start=b_start,
+        b_end=b_end,
+    ).to(device)
 
     # Move models to eval mode
     actor.eval()
@@ -72,16 +86,18 @@ def collect_experiences(data_queue, model_queue):
                 # a. Encode observation to get posterior z_t
                 posterior_logits = encoder(current_obs_dict)
                 posterior_dist = torch.distributions.Categorical(logits=posterior_logits)
-                z_sample = posterior_dist.sample()
-                z_onehot = F.one_hot(z_sample, num_classes=config.models.d_hidden // 16).float()
-                z_flat = z_onehot.view(1, -1)
+                z_indices = posterior_dist.sample()
+                z_onehot = F.one_hot(z_indices, num_classes=config.models.d_hidden // 16).float()
+                # Use the "soft" one-hot for consistency with training
+                z_sample = z_onehot + (posterior_dist.probs - posterior_dist.probs.detach())
+                z_flat = z_sample.view(1, -1)
 
                 # b. Update recurrent state h_t
                 z_embed = world_model.z_embedding(z_flat)
                 h, _ = world_model.step_dynamics(z_embed, action, h) # We don't need prior_logits here
 
                 # c. Get action from actor
-                actor_input = world_model.join_h_and_z(h, z_onehot)
+                actor_input = world_model.join_h_and_z(h, z_sample)
                 action_dist = torch.distributions.Categorical(logits=actor(actor_input))
                 action = action_dist.sample()
 

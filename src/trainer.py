@@ -15,6 +15,8 @@ from .trainer_utils import (
     symlog,
     symexp,
     twohot_encode,
+    initialize_actor,
+    initialize_critic,
 )
 from .encoder import ObservationEncoder, ThreeLayerMLP
 from .world_model import RSSMWorldModel
@@ -38,8 +40,8 @@ class WorldModelTrainer:
         )
         self.B = symexp(beta_range)
 
-        self.actor = self.initialize_actor()
-        self.critic = self.initalize_critic()
+        self.actor = initialize_actor(self.device)
+        self.critic = initialize_critic(self.device)
         self.encoder = ObservationEncoder(
             mlp_config=config.models.encoder.mlp,
             cnn_config=config.models.encoder.cnn,
@@ -48,13 +50,14 @@ class WorldModelTrainer:
         self.world_model = RSSMWorldModel(
             models_config=config.models,
             env_config=config.environment,
-            batch_size=1,  # For inference, batch size is 1
+            batch_size=config.train.batch_size,
             b_start=b_start,
             b_end=b_end,
         ).to(self.device)
 
         self.wm_params = list(self.encoder.parameters()) + list(self.world_model.parameters())
-        self.wm_optimizer = optim.Adam(self.wm_params, lr=config.train.wm_lr, weight_decay=config.train.wm_lr)
+        # TODO: Add learning rate from config
+        self.wm_optimizer = optim.Adam(self.wm_params, lr=1e-4, weight_decay=1e-6)
 
         self.max_train_steps = config.train.num_time_steps
         self.train_step = 0
@@ -107,18 +110,20 @@ class WorldModelTrainer:
 
             for t_step in range(self.pixels.shape[1]):
                 obs_t = {"pixels": self.pixels[:, t_step], "state": self.states[:, t_step]}
-                posterior_logits = self.encoder(obs_t)  # This is z_t
                 action_t = self.actions[:, t_step]
                 reward_t = self.rewards[:, t_step]
                 terminated_t = self.terminated[:, t_step]
-                posterior_dist = dist.Categorical(logits=posterior_logits)
 
-                wm_outputs = self.world_model(posterior_dist, action_t)
-                obs_reconstruction = wm_outputs["obs_reconstruction"]
-                reward_dist = wm_outputs["reward_logits"]
-                continue_logits = wm_outputs["continue_logits"]
-                prior_logits = wm_outputs["prior_logits"]
-                h_z_joined = wm_outputs["h_z_joined"]
+                posterior_logits = self.encoder(obs_t)  # This is z_t
+                posterior_dist = dist.Categorical(logits=posterior_logits) 
+
+                (
+                    obs_reconstruction,
+                    reward_dist,
+                    continue_logits,
+                    h_z_joined,
+                    prior_logits,
+                ) = self.world_model(posterior_dist, action_t)
 
                 # Updating loss of encoder and world model
                 wm_loss = self.update_wm_loss(
@@ -133,14 +138,15 @@ class WorldModelTrainer:
                     )
                 
                 # --- Dream Sequence for Actor-Critic ---
-                (dreamed_recurrent_states,
-                dreamed_actions_logits,
-                dreamed_actions_sampled
+                (
+                    dreamed_recurrent_states,
+                    dreamed_actions_logits,
+                    dreamed_actions_sampled
                 ) = self.dream_sequence(
                     h_z_joined,
-                    self.world_model.z_embedding(posterior_dist.probs.view(posterior_dist.probs.shape[0], -1)),
+                    self.world_model.z_embedding(posterior_dist.probs.view(1, -1)),
                     self.n_dream_steps
-                )
+                    )
 
                 # Predict rewards and values for the dreamed states
                 dreamed_rewards_logits = self.world_model.reward_predictor(dreamed_recurrent_states)
@@ -164,14 +170,14 @@ class WorldModelTrainer:
                 # critic_loss_fn = nn.CrossEntropyLoss()
                 # critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
                 critic_loss = -torch.mean(torch.sum(critic_targets * F.log_softmax(dreamed_values_logits_flat, dim=-1), dim=-1))
+                actor_loss, critic_loss = self.update_actor_critic_losses(
+                    dreamed_values_logits,
+                    dreamed_values,
+                    lambda_returns,
+                    dreamed_actions_logits,
+                    dreamed_actions_sampled
+                )
 
-                # Actor Loss: Policy gradient with lambda returns as advantage
-                advantage = (lambda_returns - dreamed_values).detach()
-                action_dist = torch.distributions.Categorical(logits=dreamed_actions_logits)
-                log_probs = action_dist.log_prob(dreamed_actions_sampled)
-                
-                # Reinforce algorithm: log_prob * advantage
-                actor_loss = -torch.mean(log_probs * advantage)
 
                 total_loss += wm_loss + critic_loss + actor_loss
 
@@ -189,6 +195,32 @@ class WorldModelTrainer:
 
         torch.save(self.encoder.state_dict(), config.general.encoder_path)
         torch.save(self.world_model.state_dict(), config.general.rssm_path)
+
+    def update_actor_critic_losses(
+            self,
+            dreamed_values_logits,
+            dreamed_values,
+            lambda_returns,
+            dreamed_actions_logits,
+            dreamed_actions_sampled
+    ):
+        
+        dreamed_values_logits_flat = dreamed_values_logits.view(-1, dreamed_values_logits.size(-1)) lambda_returns_flat = lambda_returns.reshape(-1)
+        critic_targets = twohot_encode(lambda_returns_flat, self.B)
+        
+        critic_loss_fn = nn.CrossEntropyLoss()
+        critic_loss = critic_loss_fn(dreamed_values_logits_flat, critic_targets)
+
+        # Actor Loss: Policy gradient with lambda returns as advantage
+        advantage = (lambda_returns - dreamed_values).detach()
+        action_dist = torch.distributions.Categorical(logits=dreamed_actions_logits)
+        log_probs = action_dist.log_prob(dreamed_actions_sampled)
+        
+        # Reinforce algorithm: log_prob * advantage
+        actor_loss = -torch.mean(log_probs * advantage)
+
+        return actor_loss, critic_loss
+
 
     def dream_sequence(
         self,
@@ -389,3 +421,4 @@ def train_world_model(data_queue, model_queue):
     """
     trainer = WorldModelTrainer(config, data_queue, model_queue)
     trainer.train_models()
+            pass
